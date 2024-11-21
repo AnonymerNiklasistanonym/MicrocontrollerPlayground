@@ -29,6 +29,11 @@ A collection of scripts used in combination with an Arduino UNO R3.
 
 Then you can open the *Arduino IDE (v2)* and compile/send programs to the with USB connected *Arduino UNO R3*.
 
+> [!NOTE]
+>
+> In the case that something breaks you can reset the IDE by closing it, removing all associated files (e.g. `~/.arduino15`, `~/.arduinoIDE`, `~/.config/arduino-ide`) and then restarting it.
+> (one example of when such a case is warranted is a never closing notification `downloading index: package_index.tar.bz2` that makes you unable to compile programs)
+
 ## Basics
 
 ### Breadboard
