@@ -27,8 +27,6 @@ A collection of scripts used in combination with an Arduino UNO R3.
    # adds read + write permissions to the arduino device
    ```
 
-   > [!NOTE]
-   >
    > This is only necessary in case you get the following error when uploading:
    >
    > ```txt
