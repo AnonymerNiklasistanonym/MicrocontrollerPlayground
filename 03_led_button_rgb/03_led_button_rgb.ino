@@ -1,5 +1,6 @@
 // Declare the current RGB animation state
-enum LEDAnimationState {
+enum LEDAnimationState
+{
   RED_TO_GREEN,
   GREEN_TO_BLUE,
   BLUE_TO_RED
@@ -29,36 +30,48 @@ LEDAnimationState ledAnimationState;
 unsigned long lastColorChangeTime = 0;
 
 // Function to get the current color (uses variable references)
-void getCurrentColor(uint8_t &red, uint8_t &green, uint8_t &blue, LEDAnimationState &state) {
-  switch (state) {
-    case LEDAnimationState::RED_TO_GREEN:
-      if (red > 0) {
-        red--;
-        green++;
-      } else {
-        state = LEDAnimationState::GREEN_TO_BLUE;
-      }
-      break;
-    case LEDAnimationState::GREEN_TO_BLUE:
-      if (green > 0) {
-        green--;
-        blue++;
-      } else {
-        state = LEDAnimationState::BLUE_TO_RED;
-      }
-      break;
-    case LEDAnimationState::BLUE_TO_RED:
-      if (blue > 0) {
-        blue--;
-        red++;
-      } else {
-        state = LEDAnimationState::RED_TO_GREEN;
-      }
-      break;
+void getCurrentColor(uint8_t& red, uint8_t& green, uint8_t& blue, LEDAnimationState& state)
+{
+  switch (state)
+  {
+  case LEDAnimationState::RED_TO_GREEN:
+    if (red > 0)
+    {
+      red--;
+      green++;
+    }
+    else
+    {
+      state = LEDAnimationState::GREEN_TO_BLUE;
+    }
+    break;
+  case LEDAnimationState::GREEN_TO_BLUE:
+    if (green > 0)
+    {
+      green--;
+      blue++;
+    }
+    else
+    {
+      state = LEDAnimationState::BLUE_TO_RED;
+    }
+    break;
+  case LEDAnimationState::BLUE_TO_RED:
+    if (blue > 0)
+    {
+      blue--;
+      red++;
+    }
+    else
+    {
+      state = LEDAnimationState::RED_TO_GREEN;
+    }
+    break;
   }
 }
 
-void setup() {
+void setup()
+{
   // initialize digital pins for the RED, GREEN and BLUE LED as an output
   pinMode(LED_PIN_RED, OUTPUT);
   pinMode(LED_PIN_GREEN, OUTPUT);
@@ -78,7 +91,8 @@ void setup() {
   ledAnimationState = LEDAnimationState::RED_TO_GREEN;
 }
 
-void loop() {
+void loop()
+{
   if (digitalRead(BUTTON_ON) == LOW)
   {
     ledOn = true;
@@ -90,9 +104,11 @@ void loop() {
     delay(BUTTON_DEBOUNCE_DELAY_MS);
   }
 
-  if (ledOn) {
+  if (ledOn)
+  {
     unsigned long currentMillis = millis();
-    if (currentMillis - lastColorChangeTime >= COLOR_CHANGE_INTERVAL_MS) {
+    if (currentMillis - lastColorChangeTime >= COLOR_CHANGE_INTERVAL_MS)
+    {
       lastColorChangeTime = currentMillis;
 
       getCurrentColor(redValue, greenValue, blueValue, ledAnimationState);
@@ -101,7 +117,9 @@ void loop() {
       analogWrite(LED_PIN_GREEN, greenValue);
       analogWrite(LED_PIN_BLUE, blueValue);
     }
-  } else {
+  }
+  else
+  {
     analogWrite(LED_PIN_RED, 0);
     analogWrite(LED_PIN_GREEN, 0);
     analogWrite(LED_PIN_BLUE, 0);
