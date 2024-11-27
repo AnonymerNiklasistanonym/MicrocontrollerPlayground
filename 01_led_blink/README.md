@@ -1,12 +1,10 @@
-# simple_led_blink
+# 01_led_blink
 
 The program has a serial output on LED `ON`/`OFF` which can be inspected using the *Serial Monitor* (`Ctrl` + `Shift` + `M`).
 
 The LED is optional since the Arduino UNO R3 board already has a LED on the board that will also blink at the same time.
 
 Since this LED is already connected to this PIN the current is per default limited by a resistor which means a LED can be safely connected.
-
-![](./breadboard_simple_led_blink.svg)
 
 ## Alternative designs
 
@@ -45,6 +43,6 @@ An LED can also be connected to the pin without altering the program.
 > \end{align*}
 > $$
 
-![](./breadboard_simple_led_blink_alt_01.svg)
+![Visualization breadboard (alt design with external LED)](./res/breadboard_01_led_blink_alt.svg)
 
-![](./schema_simple_led_blink_alt_01.svg)
+![Visualization schema (alt design with external LED)](./res/schema_01_led_blink_alt.svg)

@@ -13,7 +13,7 @@ constexpr int BUTTON_ON = 9;
 constexpr int BUTTON_OFF = 8;
 
 constexpr int POWER_SAVE_DELAY_MS = 1;
-constexpr int COLOR_CHANGE_INTERVAL_MS = POWER_SAVE_DELAY_MS * 5;
+constexpr int COLOR_CHANGE_INTERVAL_MS = POWER_SAVE_DELAY_MS * 4;
 constexpr int BUTTON_DEBOUNCE_DELAY_MS = 200;
 
 // Global variables

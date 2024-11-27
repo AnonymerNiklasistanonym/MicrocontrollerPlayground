@@ -71,23 +71,23 @@ arduino-cli core list
 Setup project:
 
 ```sh
-# => Create new project/Sketch in the directory 'simple_led_blink'
-arduino-cli sketch new simple_led_blink
-#  Sketch created in: /home/$USER/Documents/.../simple_led_blink
+# => Create new project/Sketch in the directory '01_led_blink'
+arduino-cli sketch new 01_led_blink
+#  Sketch created in: /home/$USER/Documents/.../01_led_blink
 ```
 
 Compile and upload project:
 
 ```sh
-# => Sketch is located in the directory 'simple_led_blink'
-arduino-cli compile --fqbn arduino:avr:uno simple_led_blink
+# => Sketch is located in the directory '01_led_blink'
+arduino-cli compile --fqbn arduino:avr:uno 01_led_blink
 # Sketch uses 3626 bytes (11%) of program storage space. Maximum is 32256 bytes.
 # Global variables use 236 bytes (11%) of dynamic memory, leaving 1812 bytes for local variables. Maximum is 2048 bytes.
 #
 # Used platform Version Path
 # arduino:avr   1.8.6   /home/$USER/.arduino15/packages/arduino/hardware/avr/1.8.6
 # => Arduino board is located in the directory /dev/ttyACM0
-arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno simple_led_blink
+arduino-cli upload -p /dev/ttyACM0 --fqbn arduino:avr:uno 01_led_blink
 ```
 
 Read the serial port output:
