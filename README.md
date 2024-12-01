@@ -18,7 +18,7 @@ A collection of scripts used in combination with an Arduino UNO R3.
    sudo pacman -S avrdude
    ```
 
-3. Give permission to write to the Arduino (needs to be done every restart)
+3. Give permission to write to the Arduino (if necessary)
 
    ```sh
    ls /dev/ttyACM*
@@ -33,6 +33,8 @@ A collection of scripts used in combination with an Arduino UNO R3.
    > avrdude: ser_open(): can't open device "/dev/ttyACM0":  Permission denied
    > Failed uploading: uploading error: exit status 1
    > ```
+   >
+   > (On every restart or Arduino device reconnect this needs to be repeated)
 
 Then you can open the *Arduino IDE (v2)* and compile/send programs to the with USB connected *Arduino UNO R3*.
 
