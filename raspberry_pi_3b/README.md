@@ -214,3 +214,7 @@ Vertically: Press Ctrl-b followed by "
 - To vertically split the terminal: `Ctrl`+`b` followed by `"`
 - To switch between panes: `Ctrl`+`b` followed by the left, right, up or down arrow key
 - To close tmux: `Ctrl`+`b` followed by `d`
+
+## TODO
+
+- [ ] Fix trash-notifier breadboard
