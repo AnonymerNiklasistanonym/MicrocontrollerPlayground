@@ -85,7 +85,8 @@ void testChannel(uint8_t channel) {
   }
 }
 
-bool backlightOn = false;
+bool backlightOn = true;
+bool displayOn = true;
 bool sdOn = false;
 bool sdInitalized = false;
 
@@ -114,8 +115,12 @@ void setup() {
   if constexpr (ENABLE_LCD) {
     setTCAChannel(MULTIPLEXER_TCA9548A_I2C_CHANNEL_LCD);
     lcd.init();
-    lcd.clear();
-    lcd.setBacklight(static_cast<uint8_t>(backlightOn));
+    if (!displayOn) {
+      lcd.noDisplay();
+    } else {
+      lcd.clear();
+      lcd.setBacklight(static_cast<uint8_t>(backlightOn));
+    }
   }
   // init RTC
   if constexpr (ENABLE_RTC) {
@@ -160,12 +165,26 @@ void loop() {
 
   // toggle backlight when button is pressed
   if (digitalRead(PIN_BUTTON_LCD_BACKLIGHT_TOGGLE) == LOW) {
-    backlightOn = !backlightOn;
-    Serial.print("Toggle LCD Display backlight backlightOn=");
-    Serial.println(backlightOn ? "true" : "false");
+    if (displayOn && backlightOn) {
+      backlightOn = false;
+    } else if (displayOn) {
+      displayOn = false;
+    } else {
+      displayOn = true;
+      backlightOn = true;
+    }
+    Serial.print("Toggle LCD Display/Backlight backlightOn=");
+    Serial.print(backlightOn ? "true" : "false");
+    Serial.print(", displayOn=");
+    Serial.println(displayOn ? "true" : "false");
     if constexpr (ENABLE_LCD) {
       setTCAChannel(MULTIPLEXER_TCA9548A_I2C_CHANNEL_LCD);
       lcd.setBacklight(static_cast<uint8_t>(backlightOn));
+      if (!displayOn) {
+        lcd.noDisplay();
+      } else {
+        lcd.display();
+      }
     }
     delay(BUTTON_DEBOUNCE_DELAY_MS);
   }
