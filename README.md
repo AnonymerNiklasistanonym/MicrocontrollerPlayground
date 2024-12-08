@@ -35,6 +35,12 @@ A collection of scripts used in combination with an Arduino UNO R3.
    > ```
    >
    > (On every restart or Arduino device reconnect this needs to be repeated)
+   
+   The permissions can also be done permanently by adding the current user to the `uucp` group (provides access to serial ports, USB serial devices, etc.):
+   
+   ```sh 
+   sudo usermod -a -G uucp $USER
+   ```
 
 Then you can open the *Arduino IDE (v2)* and compile/send programs to the with USB connected *Arduino UNO R3*.
 
