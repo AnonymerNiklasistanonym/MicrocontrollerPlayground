@@ -170,12 +170,12 @@ Select *Interface Options*, select *SPI*/*I2C*, enable/disable
 
    ```sh
    # Stop service
-   systemctl stop example_service.service
+   systemctl --user stop example_service.service
    ```
 
    ```sh
-   # Disable the service from starting at boot
-   systemctl disable example_service.service
+   # Disable the service from starting at boot (removes the service file!)
+   systemctl --user disable example_service.service
    ```
 
    Forget the service:
