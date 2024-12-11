@@ -15,15 +15,17 @@ import board
 DHT_PIN = board.D6
 # GPIO pin where the MQ2 digital output is connected (BCM numbering)
 MQ2_PIN = 13
+# GPIO pin where the MQ135 digital output is connected (BCM numbering)
+MQ135_PIN = 5
 
 # GPIO Setup
 GPIO.setmode(GPIO.BCM)
 GPIO.setup(MQ2_PIN, GPIO.IN)
-
+GPIO.setup(MQ135_PIN, GPIO.IN)
 
 def main():
     try:
-        print("Reading DHT22 and MQ2 sensors...")
+        print("Reading DHT22, MQ13 and MQ2 sensors...")
         dht_sensor = adafruit_dht.DHT22(DHT_PIN)
         while True:
             try:
@@ -37,10 +39,16 @@ def main():
                 print(f"DHT22 -> Error: {e}")
 
             mq2_state = GPIO.input(MQ2_PIN)
-            if mq2_state == 0:
-                print("MQ2 -> Gas detected!")
+            if mq2_state == GPIO.LOW:
+                print("MQ2 -> Gas detected")
             else:
-                print("MQ2 -> Air is clean.")
+                print("MQ2 -> Air is clean")
+
+            mq135_state = GPIO.input(MQ135_PIN)
+            if mq135_state == GPIO.HIGH:
+                print("MQ135 -> Air is clean")
+            else:
+                print("MQ135 -> Poor air quality detected")
 
             time.sleep(3)
     except KeyboardInterrupt:
