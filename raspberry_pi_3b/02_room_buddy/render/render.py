@@ -23,7 +23,6 @@ UpdatedImageAreas = list[tuple[UpdatedImagePosition, UpdatedImageArea]]
 
 
 class DisplayData(TypedDict):
-    display_size: tuple[Width, Height]
     trash_dates: Optional[dict[TrashDate, TrashType]]
     # [-40,+80]°C
     temperature: Optional[Celsius]
@@ -38,32 +37,32 @@ class DisplayData(TypedDict):
 
 
 SCRIPT_DIR = Path(os.path.dirname(os.path.abspath(__file__)))
+RES_DIR = SCRIPT_DIR.joinpath('..', 'res')
 
 FONT_TTF_LIST: list[Path] = [
-    SCRIPT_DIR.joinpath('fonts', 'Roboto-Black.ttf'),
-    # Path('/usr/share/fonts/truetype/freefont/FreeMonoBold.ttf'),
-    # Path('/usr/share/fonts/gnu-free/FreeMonoBold.otf'),
+    RES_DIR.joinpath('fonts', 'Roboto-Black.ttf'),
 ]
 FONT_SIZE_BIG_DIVIDER = 10
 FONT_SIZE_TEXT_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 1.5)
 FONT_SIZE_UPDATE_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 3.5)
 TEXT_SPACING_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 4)
 
-ICON_DIR = SCRIPT_DIR.joinpath('icons')
-ICON_DIR_CACHED = SCRIPT_DIR.joinpath('icons', 'cached')
+ICON_DIR = RES_DIR.joinpath('icons')
+ICON_DIR_CACHED = ICON_DIR.joinpath('cached')
 ICON_NAMES: list[str] = [
-    'info'
+    'info_white'
 ]
 
 # The previous display data for comparisons
 previousDisplayData: Optional[DisplayData] = None
 
 
-def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
+def render_display(data: DisplayData, display_size: tuple[Width, Height]) -> tuple[Image, UpdatedImageAreas]:
     updated_areas: UpdatedImageAreas = []
+    display_width, display_height = display_size
     # Create image to be displayed
     # mode "1": Grayscale, Binary image, 1-bit pixels [black (0) and white (255)]
-    image = Image.new('1', data['display_size'], 255)
+    image = Image.new('1', display_size, 255)
     draw = ImageDraw.Draw(image)
     # setup sensor data
     sensor_data = [
@@ -80,10 +79,10 @@ def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
             break
     if existing_font is None:
         raise RuntimeError(f"Could not find a supported font ({",".join(str(x) for x in FONT_TTF_LIST)})")
-    font_size_big = int(data['display_size'][1] / FONT_SIZE_BIG_DIVIDER)
-    font_size_text = int(data['display_size'][1] / FONT_SIZE_TEXT_DIVIDER)
-    font_size_update = int(data['display_size'][1] / FONT_SIZE_UPDATE_DIVIDER)
-    text_spacing = int(data['display_size'][1] / TEXT_SPACING_DIVIDER)
+    font_size_big = int(display_height / FONT_SIZE_BIG_DIVIDER)
+    font_size_text = int(display_height / FONT_SIZE_TEXT_DIVIDER)
+    font_size_update = int(display_height / FONT_SIZE_UPDATE_DIVIDER)
+    text_spacing = int(display_height / TEXT_SPACING_DIVIDER)
     font_text = ImageFont.truetype(existing_font, font_size_text)
     font_big = ImageFont.truetype(existing_font, font_size_big)
     font_update = ImageFont.truetype(existing_font, font_size_update)
@@ -114,7 +113,7 @@ def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
                                   for trashType in set(data['trash_dates'].values())}
 
     # Next trash type header (black bg, white text)
-    draw.rectangle((0, 0, data['display_size'][0], 2 * text_spacing + font_size_big), fill=0)
+    draw.rectangle((0, 0, display_width, 2 * text_spacing + font_size_big), fill=0)
     y_position_text = text_spacing
     for trash_date, trash_type in sorted_trash_dates.items():
         time_text = trash_date.strftime('%d.%m')
@@ -126,7 +125,7 @@ def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
         draw.text((text_spacing * 2 + font_size_big, y_position_text), text, font=font_big, fill=255)
         break
 
-    image_to_paste = Image.open(loaded_icons['info'])
+    image_to_paste = Image.open(loaded_icons['info_white'])
     image.paste(image_to_paste, (y_position_text, y_position_text))
 
     y_position_text += font_size_big + 2 * text_spacing
@@ -139,7 +138,7 @@ def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
             first = False
             continue
         text = f"{trash_date.strftime('%d.%m')} {trash_type}"
-        if y_position_text + font_size_text + 2 * text_spacing + font_size_update > data['display_size'][1]:
+        if y_position_text + font_size_text + 2 * text_spacing + font_size_update > display_height:
             break  # Stop, no vertical space available
         draw.text((text_spacing, y_position_text), text, font=font_text, fill=0)
         y_position_text += font_size_text + text_spacing
@@ -149,16 +148,16 @@ def render_display(data: DisplayData) -> tuple[Image, UpdatedImageAreas]:
     for sensor_value, sensor_name, sensor_text_func in sensor_data:
         if sensor_value is None:
             continue
-        draw.text((int(data['display_size'][0] * 0.5) - text_spacing, y_position_text),
+        draw.text((int(display_width * 0.5) - text_spacing, y_position_text),
                   sensor_name, font=font_text, fill=0)
-        draw.text((int(data['display_size'][0] * 0.85) - text_spacing, y_position_text),
+        draw.text((int(display_width * 0.85) - text_spacing, y_position_text),
                   sensor_text_func(sensor_value), font=font_big, fill=0)
         y_position_text += font_size_big + text_spacing
 
     # Add current time as indicator of the last update
     last_update_text = datetime.now().strftime('last update: %Y-%m-%d %H:%M:%S')
-    draw.text((data['display_size'][0] - font_size_update * (len(last_update_text) / 2), data['display_size'][1] - text_spacing - font_size_update),
-              last_update_text,
-              font=font_update, fill=0)
+    draw.text((display_width - font_size_update * (len(last_update_text) / 2),
+               display_height - text_spacing - font_size_update),
+              last_update_text, font=font_update, fill=0)
 
     return image, updated_areas

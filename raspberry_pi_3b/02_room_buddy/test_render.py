@@ -14,7 +14,6 @@ def update_image():
 
     # Render the updated image
     image, _ = render_display({
-        "display_size": (Width(current_width), Height(current_height)),
         "trash_dates": {
             TrashDate(start_time.date() + timedelta(days=0)): TrashType("Biomüll"),
             TrashDate(start_time.date() + timedelta(days=10)): TrashType("Restmüll"),
@@ -23,7 +22,7 @@ def update_image():
         "humidity": 50,
         "air_pollution": None,
         "gas_concentration": None
-    })
+    }, (Width(current_width), Height(current_height)))
 
     # Ensure the image is valid and update the label
     if isinstance(image, Image.Image):
