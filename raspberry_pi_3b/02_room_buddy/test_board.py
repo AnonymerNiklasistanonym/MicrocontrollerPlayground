@@ -9,7 +9,7 @@ from gpiozero import Button, RGBLED
 
 button_red = Button(19)
 button_black = Button(26)
-led_rgb_1 = RGBLED(23, 24, 25)
+led_rgb_1 = RGBLED(4, 27, 22)
 led_rgb_2 = RGBLED(16, 20, 21)
 
 
