@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from PIL import Image, ImageTk
 
-from render.render import render_display, Width, Height, TrashDate, TrashType
+from lib.render.render import render_display_bw, Action, Widget, Width, Height, ActionContent, WidgetContent
 
 
 def update_image():
@@ -13,16 +13,17 @@ def update_image():
     current_height = root.winfo_height() if root.winfo_height() != 1 else 480
 
     # Render the updated image
-    image, _ = render_display({
-        "trash_dates": {
-            TrashDate(start_time.date() + timedelta(days=0)): TrashType("Biomüll"),
-            TrashDate(start_time.date() + timedelta(days=10)): TrashType("Restmüll"),
-        },
-        "temperature": 23,
-        "humidity": 50,
-        "air_pollution": None,
-        "gas_concentration": None
-    }, (Width(current_width), Height(current_height)))
+    image = render_display_bw([
+        Action(generate_content=lambda: ActionContent(None, None, "Action #1"), date=start_time.date() + timedelta(days=0)),
+        Action(generate_content=lambda: ActionContent("info_white", "[Trash]", "Action #2"), date=start_time.date() + timedelta(days=2))
+    ], [
+        Widget(generate_content=lambda: [
+            WidgetContent((start_time.date() + timedelta(days=0)).strftime('%d.%m'), "Biomüll"),
+            WidgetContent((start_time.date() + timedelta(days=2)).strftime('%d.%m'), "Restmüll"),
+        ]),
+        Widget(generate_content=lambda: [WidgetContent("Temperature", f"{23}°C")]),
+        Widget(generate_content=lambda: [WidgetContent("Relative Humidity", f"{60}%")]),
+    ], (Width(current_width), Height(current_height)))
 
     # Ensure the image is valid and update the label
     if isinstance(image, Image.Image):
