@@ -1,0 +1,15 @@
+[Unit]
+Description=Room Buddy
+After=default.target
+
+[Service]
+ExecStart=ABSOLUTE_PATH_TO_VENV/bin/python3 ABSOLUTE_PATH_TO_DIR/new_main.py
+WorkingDirectory=ABSOLUTE_PATH_TO_DIR
+StandardOutput=journal
+StandardError=journal
+Restart=always
+Environment="CALENDAR_URL=https://api.abfall.io/?key=INSERT_CUSTOM&mode=export&idhousenumber=INSERT_CUSTOM&wastetypes=INSERT_CUSTOM&showinactive=false&type=ics"
+Environment="OUTDOOR_WEATHER_URL=http://192.168.2.158/json_measurements"
+
+[Install]
+WantedBy=default.target

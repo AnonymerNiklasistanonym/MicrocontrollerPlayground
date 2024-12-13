@@ -14,15 +14,15 @@ def update_image():
 
     # Render the updated image
     image = render_display_bw([
-        Action(generate_content=lambda: ActionContent(None, None, "Action #1"), date=start_time.date() + timedelta(days=0)),
-        Action(generate_content=lambda: ActionContent("info_white", "[Trash]", "Action #2"), date=start_time.date() + timedelta(days=2))
+        Action(generate_content=lambda: ActionContent((None, None, "Action #1")), date=start_time.date() + timedelta(days=0)),
+        Action(generate_content=lambda: ActionContent(("info_white", "[Trash]", "Action #2")), date=start_time.date() + timedelta(days=2))
     ], [
         Widget(generate_content=lambda: [
-            WidgetContent((start_time.date() + timedelta(days=0)).strftime('%d.%m'), "Biomüll"),
-            WidgetContent((start_time.date() + timedelta(days=2)).strftime('%d.%m'), "Restmüll"),
+            WidgetContent(((start_time.date() + timedelta(days=0)).strftime('%d.%m'), "Biomüll")),
+            WidgetContent(((start_time.date() + timedelta(days=2)).strftime('%d.%m'), "Restmüll")),
         ]),
-        Widget(generate_content=lambda: [WidgetContent("Temperature", f"{23}°C")]),
-        Widget(generate_content=lambda: [WidgetContent("Relative Humidity", f"{60}%")]),
+        Widget(generate_content=lambda: [WidgetContent(("Temperature", f"{23}°C"))]),
+        Widget(generate_content=lambda: [WidgetContent(("Relative Humidity", f"{60}%"))]),
     ], (Width(current_width), Height(current_height)))
 
     # Ensure the image is valid and update the label

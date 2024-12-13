@@ -1,12 +1,16 @@
 from datetime import date
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Callable, Optional, NewType
 import os
+
+
+# 'pip install Pillow'
+from typing import Callable, Optional, NewType
 # 'pip install Pillow'
 from PIL import Image, ImageDraw, ImageFont
 # 'pip install cairosvg'
 import cairosvg
+
 
 Width = NewType('Width', int)
 Height = NewType('Height', int)
@@ -98,7 +102,7 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
             existing_font = font
             break
     if existing_font is None:
-        raise RuntimeError(f"Could not find a supported font ({",".join(str(x) for x in FONT_TTF_LIST)})")
+        raise RuntimeError(f"Could not find a supported font ({','.join(str(x) for x in FONT_TTF_LIST)})")
     calculated_font_sizes = {
         "big": int(display_height / FONT_SIZE_BIG_DIVIDER),
         "text": int(display_height / FONT_SIZE_TEXT_DIVIDER),
@@ -130,7 +134,7 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
     y_position = 0
     for action in actions:
         action_height = 2 * calculated_font_spacings["big"] + calculated_font_sizes["big"]
-        if y_position + action_height + ACTION_SPACING > display_height / 2:
+        if y_position + action_height + ACTION_SPACING > display_height / 4:
             break
         action_icon, action_description, action_text = action.generate_content()
         # draw action bg
@@ -156,7 +160,7 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
         y_position += action_height + ACTION_SPACING
 
     # draw widgets
-    y_position = display_height / 2
+    y_position = display_height / 4
     column = 0
     for widget in widgets:
         widget_content = widget.generate_content()
@@ -166,7 +170,7 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
             if column == 1 or display_height / 2 + widget_height + WIDGET_SPACING > display_height:
                 break
             column = 1
-            y_position = display_height / 2
+            y_position = display_height / 4
         # draw widget content
         x_position_widget_content = calculated_font_spacings["big"] if column == 0 else calculated_font_spacings["big"] + int(display_width / 2)
         y_position_widget_content = y_position + calculated_font_spacings["big"]
@@ -174,7 +178,9 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
             # draw widget description
             x_position_widget_content_element = x_position_widget_content
             if widget_description is not None:
-                text_width_big, text_height_big = get_text_dimensions(widget_text, loaded_fonts["big"])
+                text_width_big, text_height_big = get_text_dimensions(
+                    "A" + widget_text, loaded_fonts["big"]
+                )
                 text_width, text_height = get_text_dimensions(widget_description, loaded_fonts["text"])
                 draw.text((x_position_widget_content_element, y_position_widget_content + text_height_big - text_height + 4),
                           text=widget_description, fill=COLOR_BLACK, font=loaded_fonts["text"])

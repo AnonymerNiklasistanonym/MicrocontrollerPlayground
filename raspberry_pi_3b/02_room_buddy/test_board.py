@@ -4,13 +4,16 @@
 # python -m test_board
 
 import asyncio
+import pins
+
 # requires 'gpiozero' ('python3-gpiozero')
 from gpiozero import Button, RGBLED
 
-button_red = Button(19)
-button_black = Button(26)
-led_rgb_1 = RGBLED(4, 27, 22)
-led_rgb_2 = RGBLED(16, 20, 21)
+
+button_red = Button(pins.gpio_pin_input_pullup_button_red)
+button_black = Button(pins.gpio_pin_input_pullup_button_black)
+led_rgb_main = RGBLED(*pins.gpio_pins_output_pwm_led_rgb_main)
+led_rgb_info = RGBLED(*pins.gpio_pins_output_pwm_led_rgb_info)
 
 
 async def rgb_led_animation(rgb_led: RGBLED, offset=0, speed=5, name="rgb_led"):
@@ -33,8 +36,8 @@ async def monitor_button(button: Button, name="button", delay_button_debounce=0.
 
 async def main():
     await asyncio.gather(
-        rgb_led_animation(led_rgb_1, name="rgb_led_1"),
-        rgb_led_animation(led_rgb_2, name="rgb_led_2", offset=5),
+        rgb_led_animation(led_rgb_main, name="rgb_led_1"),
+        rgb_led_animation(led_rgb_info, name="rgb_led_2", offset=5),
         monitor_button(button_red, name="button_red"),
         monitor_button(button_black, name="button_black"),
     )
