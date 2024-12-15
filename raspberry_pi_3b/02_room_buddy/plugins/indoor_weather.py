@@ -1,6 +1,8 @@
 import asyncio
-from datetime import datetime, timedelta
-from logging import Logger
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, NewType
 
 
@@ -8,10 +10,11 @@ from lib.plugins.plugin import PluginBase, ChangeDetected
 from lib.render.render import Widget, WidgetContent
 from lib.is_raspberry_pi.is_raspberry_pi import is_raspberry_pi
 from lib.sensors.dht22 import DHT22_TOLERANCE_TEMPERATURE, DHT22_TOLERANCE_HUMIDITY, DHT22_UPDATE_FREQUENCY
+from .weather_db.weather_db import initialize_database, add_database_entry
 
 detected_raspberry_pi = is_raspberry_pi()
 if detected_raspberry_pi:
-    # requires 'adafruit-circuitpython-dht' (pip install adafruit-circuitpython-dht --install-option="--force-pi")
+    # requires 'adafruit-circuitpython-dht'
     import adafruit_dht
     import board
 
@@ -22,6 +25,9 @@ RelativeHumidityPercent = NewType('RelativeHumidityPercent', float)
 
 # GPIO pin where the DHT22 is connected (BCM numbering)
 DHT22_PIN = board.D6 if detected_raspberry_pi else None
+
+# database
+DB_INDOOR_WEATHER = Path(os.path.dirname(os.path.realpath(sys.argv[0]))).joinpath("data", "indoor_weather.db")
 
 
 class Plugin(PluginBase):
@@ -44,6 +50,10 @@ class Plugin(PluginBase):
 
     async def run(self):
         """Simulate temperature data collection"""
+        initialize_database(DB_INDOOR_WEATHER, [
+            ("temperature_data", "temperature_celsius", "REAL"),
+            ("relative_humidity_data", "relative_humidity_percent", "REAL")
+        ])
         while True:
             try:
                 current_time = datetime.now()
@@ -56,9 +66,13 @@ class Plugin(PluginBase):
                     if self.temp_changed(None if self.temp is None else self.temp[0], temp):
                         self.logger.info(f"Detected change: {temp=:.1f}")
                         self.temp = temp, current_time
+                        add_database_entry(DB_INDOOR_WEATHER, "temperature_data", "temperature_celsius",
+                                           current_time, temp)
                     if self.humidity_changed(None if self.humidity is None else self.humidity[0], humidity):
                         self.logger.info(f"Detected change: {humidity=:.1f}")
                         self.humidity = humidity, current_time
+                        add_database_entry(DB_INDOOR_WEATHER, "relative_humidity_data", "relative_humidity_percent",
+                                           current_time, humidity)
                 else:
                     self.logger.warning(f"Read from DHT22: Failed to read data.")
             except RuntimeError as e:

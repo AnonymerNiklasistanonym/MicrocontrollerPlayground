@@ -1,19 +1,24 @@
 import asyncio
 import os
+import sys
+from pathlib import Path
 
 import aiohttp
-from datetime import datetime, timedelta
-from logging import Logger
+from datetime import datetime
 from typing import Optional, NewType
 
 from lib.plugins.plugin import PluginBase, ChangeDetected
 from lib.render.render import Widget, WidgetContent
 from lib.sensors.dht22 import DHT22_TOLERANCE_TEMPERATURE, DHT22_TOLERANCE_HUMIDITY
+from .weather_db.weather_db import initialize_database, add_database_entry
 
 TemperatureCelsius = NewType('TemperatureCelsius', float)
 RelativeHumidityPercent = NewType('RelativeHumidityPercent', float)
 
 REQUEST_INTERVAL_SECONDS = 5  # Fetch data every 5 seconds
+
+# database
+DB_OUTDOOR_WEATHER = Path(os.path.dirname(os.path.realpath(sys.argv[0]))).joinpath("data", "outdoor_weather.db")
 
 
 class Plugin(PluginBase):
@@ -54,12 +59,25 @@ class Plugin(PluginBase):
         if not outdoor_weather_url:
             raise RuntimeError("OUTDOOR_WEATHER_URL environment variable not set.")
         self.outdoor_weather_url = outdoor_weather_url
+        initialize_database(DB_OUTDOOR_WEATHER, [
+            ("temperature_data", "temperature_celsius", "REAL"),
+            ("relative_humidity_data", "relative_humidity_percent", "REAL")
+        ])
         while True:
             json_data = await self.fetch_data()
             if json_data:
                 try:
                     temperature_timestamps = json_data['temperature_timestamps']
                     humidity_timestamps = json_data['humidity_timestamps']
+
+                    self.logger.error(f"{temperature_timestamps=}, {humidity_timestamps=}")
+                    for temp, temp_time in temperature_timestamps:
+                        add_database_entry(DB_OUTDOOR_WEATHER, "temperature_data", "temperature_celsius",
+                                           datetime.fromisoformat(temp_time), temp)
+
+                    for humidity, humidity_time in humidity_timestamps:
+                        add_database_entry(DB_OUTDOOR_WEATHER, "relative_humidity_data", "relative_humidity_percent",
+                                           datetime.fromisoformat(humidity_time), humidity)
 
                     if len(temperature_timestamps) > 0:
                         latest_temp = temperature_timestamps[-1]

@@ -1,0 +1,14 @@
+[Unit]
+Description=Room Buddy Data Visualization
+After=default.target
+
+[Service]
+ExecStart=/usr/bin/node ABSOLUTE_PATH_TO_DIR/server.js
+WorkingDirectory=ABSOLUTE_PATH_TO_DIR
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+Restart=always
+
+[Install]
+WantedBy=default.target
