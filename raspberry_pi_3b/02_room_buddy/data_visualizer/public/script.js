@@ -23,47 +23,148 @@ function addLegend(svg, width, labels, colors) {
             .text(label);
     });
 }
-// Fetch and visualize data
+function clipFilter(minThreshold, maxThreshold, name) {
+    return (current) => {
+        if (current.value >= minThreshold && current.value <= maxThreshold) {
+            return true;
+        }
+        console.log(`Filter (clip) ${name} value ${current.value} (minThreshold=${minThreshold},maxThreshold=${maxThreshold})`)
+        return false;
+    };
+}
+function rollingThresholdFilter(windowSize, thresholdFactor, name) {
+    return (current, index, array) => {
+        const start = Math.max(0, index - Math.floor(windowSize / 2));
+        const end = Math.min(array.length, index + Math.ceil(windowSize / 2));
+        const window = array.slice(start, end).map(a => a.value);
+
+        const mean = d3.mean(window);
+        const stdDev = d3.deviation(window);
+
+        const lowerLimit = mean - thresholdFactor * stdDev;
+        const upperLimit = mean + thresholdFactor * stdDev;
+
+        if (current.value >= lowerLimit && current.value <= upperLimit) {
+            return true;
+        }
+        console.log(`Filter (rolling threshold) ${name} value ${current.value} (windowSize=${windowSize},thresholdFactor=${thresholdFactor},window=${window.join(',')},lowerLimit=${lowerLimit},upperLimit=${upperLimit})`)
+        return false;
+    };
+}
+function differenceThresholdFilter(valueThreshold , name) {
+    let lastValid = null;
+
+    return function (current, index, array) {
+        if (index === 0 || Math.abs(current.value - lastValid.value) <= valueThreshold) {
+            lastValid = current;
+            return true;
+        }
+        console.log(`Filter (difference threshold) ${name} value ${current.value} (valueThreshold=${valueThreshold},lastValid=${lastValid})`)
+        return false;
+    };
+}
+function dateRangeFilter(startDate, endDate , name) {
+    return function (current, index, array) {
+        if ((!isNaN(startDate) ? current.timestamp >= startDate : true) && (!isNaN(endDate) ? current.timestamp <= endDate : true)) {
+            return true;
+        }
+        console.log(`Filter (date range) ${name} value ${current.value} (startDate=${startDate},endDate=${endDate})`)
+        return false;
+    };
+}
+function getLatestTimestamp(...lists) {
+    let latest = null;
+
+    lists.forEach(list => {
+        list.forEach(item => {
+            if (!latest || item.timestamp > latest) {
+                latest = item.timestamp;
+            }
+        });
+    });
+
+    return latest ? latest : null;
+}
+function addLatestDataPoint(list, latestTimestamp) {
+    if (latestTimestamp !== null && list.length > 0 && list[list.length - 1].timestamp !== latestTimestamp) {
+        list.push({...list[list.length - 1], timestamp: latestTimestamp});
+    }
+    return list;
+}
+
 async function fetchData() {
     const [indoorResponse, outdoorResponse] = await Promise.all([
         fetch('/api/indoor').then(res => res.json()),
         fetch('/api/outdoor').then(res => res.json())
     ]);
-
     console.log("read data:", indoorResponse, outdoorResponse)
-    // Extract temperature and humidity data
-    const indoorTemperature = indoorResponse.temperatureData
-        .filter(d => d.temperature_celsius >= -40 && d.temperature_celsius <= 80)
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.temperature_celsius
-        }));
-    const indoorHumidity = indoorResponse.humidityData
-        .filter(d => d.relative_humidity_percent >= 0 && d.relative_humidity_percent <= 100)
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.relative_humidity_percent
-        }));
 
-    const outdoorTemperature = outdoorResponse.temperatureData
-        .filter(d => d.temperature_celsius >= -40 && d.temperature_celsius <= 80)
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.temperature_celsius
-        }));
-    const outdoorHumidity = outdoorResponse.humidityData
-        .filter(d => d.relative_humidity_percent >= 0 && d.relative_humidity_percent <= 100)
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.relative_humidity_percent
-        }));
-
-    visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHumidity);
+    return {indoorResponse,outdoorResponse};
 }
 
-function visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHumidity) {
-    const combinedTemperatureData = [...indoorTemperature, ...outdoorTemperature];
-    const combinedHumidityData = [...indoorHumidity, ...outdoorHumidity];
+function filterData(data, startDate, endDate) {
+    const dht22MinTemperatureCelsius = -40
+    const dht22MaxTemperatureCelsius = 80
+    const dht22MinRelativeHumidityPercent = 0
+    const dht22MaxRelativeHumidityPercent = 100
+
+    const indoorTemperature = data.indoorResponse.temperatureData
+        .map(d => ({
+            timestamp: new Date(d.timestamp),
+            value: d.temperature_celsius
+        }))
+        .filter(clipFilter(dht22MinTemperatureCelsius, dht22MaxTemperatureCelsius, "indoorTemperature"))
+        .filter(dateRangeFilter(startDate, endDate, "indoorTemperature"));
+    const indoorHumidity = data.indoorResponse.humidityData
+        .map(d => ({
+            timestamp: new Date(d.timestamp),
+            value: d.relative_humidity_percent
+        }))
+        .filter(clipFilter(dht22MinRelativeHumidityPercent, dht22MaxRelativeHumidityPercent, "indoorHumidity"))
+        .filter(dateRangeFilter(startDate, endDate, "indoorHumidity"));
+
+    const outdoorTemperature = data.outdoorResponse.temperatureData
+        .map(d => ({
+            timestamp: new Date(d.timestamp),
+            value: d.temperature_celsius
+        }))
+        .filter(clipFilter(dht22MinTemperatureCelsius, dht22MaxTemperatureCelsius, "outdoorTemperature"))
+        .filter(dateRangeFilter(startDate, endDate, "outdoorTemperature"));
+    const outdoorHumidity = data.outdoorResponse.humidityData
+        .map(d => ({
+            timestamp: new Date(d.timestamp),
+            value: d.relative_humidity_percent
+        }))
+        .filter(clipFilter(dht22MinRelativeHumidityPercent, dht22MaxRelativeHumidityPercent, "outdoorHumidity"))
+        .filter(dateRangeFilter(startDate, endDate, "outdoorHumidity"));
+
+    const latestTimestampTemperature = getLatestTimestamp(indoorTemperature, outdoorTemperature)
+    const latestTimestampHumidity = getLatestTimestamp( indoorHumidity, outdoorHumidity)
+
+    return {
+        indoorTemperature:
+        {
+            clipped: indoorTemperature,
+            filtered: addLatestDataPoint(indoorTemperature.filter(rollingThresholdFilter(5, 1, "indoorTemperature")), latestTimestampTemperature),
+        },
+        outdoorTemperature: {
+            clipped: outdoorTemperature,
+            filtered: addLatestDataPoint(outdoorTemperature.filter(rollingThresholdFilter(5, 1, "outdoorTemperature")), latestTimestampTemperature),
+        },
+        indoorHumidity: {
+            clipped: indoorHumidity,
+            filtered: addLatestDataPoint(indoorHumidity.filter(rollingThresholdFilter(5, 0.5, "indoorHumidity")), latestTimestampHumidity),
+        },
+        outdoorHumidity: {
+            clipped: outdoorHumidity,
+            filtered: addLatestDataPoint(outdoorHumidity.filter(rollingThresholdFilter(5, 0.5, "outdoorHumidity")), latestTimestampHumidity),
+        },
+    };
+}
+
+function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHumidity) {
+    const combinedTemperatureData = [...indoorTemperature.filtered, ...outdoorTemperature.filtered];
+    const combinedHumidityData = [...indoorHumidity.filtered, ...outdoorHumidity.filtered];
 
     // Dimensions and margins for both graphs
     const margin = { top: 20, right: 20, bottom: 30, left: 80 },
@@ -104,15 +205,31 @@ function visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, ou
         .y(d => yTempScale(d.value));
 
     svgTemp.append("path")
-        .datum(indoorTemperature)
+        .datum(indoorTemperature.filtered)
         .attr("d", tempLine)
         .style("stroke", "blue")
         .style("fill", "none");
 
     svgTemp.append("path")
-        .datum(outdoorTemperature)
+        .datum(outdoorTemperature.filtered)
         .attr("d", tempLine)
         .style("stroke", "red")
+        .style("fill", "none");
+
+    svgTemp.append("path")
+        .datum(indoorTemperature.clipped)
+        .attr("d", tempLine)
+        .style("stroke", "blue")
+        .style("stroke-opacity", 0.3)
+        .style("stroke-dasharray", "4,2")
+        .style("fill", "none");
+
+    svgTemp.append("path")
+        .datum(outdoorTemperature.clipped)
+        .attr("d", tempLine)
+        .style("stroke", "red")
+        .style("stroke-opacity", 0.3)
+        .style("stroke-dasharray", "4,2")
         .style("fill", "none");
 
     svgTemp.append("text")
@@ -129,7 +246,7 @@ function visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, ou
         .text("Temperature (°C)");
 
     // Add legend for temperature chart
-    addLegend(svgTemp, width, ["Indoor", "Outdoor"], ["blue", "red"]);
+    addLegend(svgTemp, width, ["Indoor (filtered)", "Outdoor (filtered)"], ["blue", "red"]);
 
     // --- Humidity Graph ---
     const svgHum = createSvg("humidityChart");
@@ -156,15 +273,31 @@ function visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, ou
         .y(d => yHumScale(d.value));
 
     svgHum.append("path")
-        .datum(indoorHumidity)
+        .datum(indoorHumidity.filtered)
         .attr("d", humLine)
         .style("stroke", "blue")
         .style("fill", "none");
 
     svgHum.append("path")
-        .datum(outdoorHumidity)
+        .datum(outdoorHumidity.filtered)
         .attr("d", humLine)
         .style("stroke", "red")
+        .style("fill", "none");
+
+    svgHum.append("path")
+        .datum(indoorHumidity.clipped)
+        .attr("d", humLine)
+        .style("stroke", "blue")
+        .style("stroke-opacity", 0.3)
+        .style("stroke-dasharray", "4,2")
+        .style("fill", "none");
+
+    svgHum.append("path")
+        .datum(outdoorHumidity.clipped)
+        .attr("d", humLine)
+        .style("stroke", "red")
+        .style("stroke-opacity", 0.3)
+        .style("stroke-dasharray", "4,2")
         .style("fill", "none");
 
     svgHum.append("text")
@@ -181,8 +314,35 @@ function visualizeData(indoorTemperature, outdoorTemperature, indoorHumidity, ou
         .text("Humidity (%)");
 
     // Add legend for humidity chart
-    addLegend(svgHum, width, ["Indoor", "Outdoor"], ["blue", "red"]);
+    addLegend(svgHum, width, ["Indoor (filtered)", "Outdoor (filtered)"], ["blue", "red"]);
 }
 
 // Load data
-fetchData();
+fetchData().then(data => {
+
+    function refilterData() {
+        const startDate = new Date(document.getElementById("startDate").value);
+        const endDate = new Date(document.getElementById("endDate").value);
+
+        refilteredData = filterData(data, startDate, endDate)
+        render(
+            refilteredData.indoorTemperature,
+            refilteredData.outdoorTemperature,
+            refilteredData.indoorHumidity,
+            refilteredData.outdoorHumidity,
+        );
+    }
+
+    // Event Listeners
+    document.getElementById("startDate").addEventListener("change", refilterData);
+    document.getElementById("endDate").addEventListener("change", refilterData);
+
+    // Initial Render
+    const filteredData = filterData(data)
+    render(
+        filteredData.indoorTemperature,
+        filteredData.outdoorTemperature,
+        filteredData.indoorHumidity,
+        filteredData.outdoorHumidity,
+    );
+}).catch(err => consoler.error(err));
