@@ -2,21 +2,18 @@ from datetime import date
 from pathlib import Path
 from dataclasses import dataclass, field
 import os
-
-
-# 'pip install Pillow'
 from typing import Callable, Optional, NewType
-# 'pip install Pillow'
+
+# requires 'qrcode'
+import qrcode
+# requires 'Pillow'
 from PIL import Image, ImageDraw, ImageFont
-# 'pip install cairosvg'
+# requires 'cairosvg'
 import cairosvg
 
 
 Width = NewType('Width', int)
 Height = NewType('Height', int)
-WidgetContentDescription = NewType('Widget Description', str)
-WidgetContentText = NewType('Widget Text', str)
-WidgetContent = tuple[Optional[WidgetContentDescription], WidgetContentText]
 ActionContentDescription = NewType('Action Description', str)
 ActionContentText = NewType('Action Text', str)
 ActionContentIcon = NewType('Action Icon', str)
@@ -31,6 +28,11 @@ class Action:
     on_select_alt: Optional[Callable[[], None]] = field(default=None, metadata={"description": "Callback on selection "
                                                                                                "using the alt button"})
 
+@dataclass
+class WidgetContent:
+    text: str = field()
+    description: Optional[str] = field(default=None)
+    images: Optional[list[Image]] = field(default=None)
 
 @dataclass
 class Widget:
@@ -43,8 +45,8 @@ RES_DIR = SCRIPT_DIR.joinpath('..', '..', 'res')
 FONT_TTF_LIST: list[Path] = [
     RES_DIR.joinpath('fonts', 'Roboto-Black.ttf'),
 ]
-FONT_SIZE_BIG_DIVIDER = 11
-FONT_SIZE_TEXT_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 1.5)
+FONT_SIZE_BIG_DIVIDER = 12
+FONT_SIZE_TEXT_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 1.4)
 FONT_SIZE_UPDATE_DIVIDER = int(FONT_SIZE_BIG_DIVIDER * 3.5)
 TEXT_SPACING_DIVIDER = 4
 
@@ -166,6 +168,11 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
         widget_content = widget.generate_content()
         widget_height = ((calculated_font_spacings["big"] * len(widget_content) + 1) +
                          (calculated_font_sizes["big"] * len(widget_content)))
+        # todo fix the height calculation
+        for content in widget_content:
+            if content.images is not None:
+                widget_height += max([img.height for img in content.images])
+
         if y_position + widget_height + WIDGET_SPACING > display_height:
             if column == 1 or display_height / 2 + widget_height + WIDGET_SPACING > display_height:
                 break
@@ -174,21 +181,47 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
         # draw widget content
         x_position_widget_content = calculated_font_spacings["big"] if column == 0 else calculated_font_spacings["big"] + int(display_width / 2)
         y_position_widget_content = y_position + calculated_font_spacings["big"]
-        for widget_description, widget_text in widget_content:
+        for content in widget_content:
             # draw widget description
             x_position_widget_content_element = x_position_widget_content
-            if widget_description is not None:
+            if content.description is not None:
                 text_width_big, text_height_big = get_text_dimensions(
-                    "A" + widget_text, loaded_fonts["big"]
+                    "A" + content.text, loaded_fonts["big"]
                 )
-                text_width, text_height = get_text_dimensions(widget_description, loaded_fonts["text"])
+                text_width, text_height = get_text_dimensions(content.description, loaded_fonts["text"])
                 draw.text((x_position_widget_content_element, y_position_widget_content + text_height_big - text_height + 4),
-                          text=widget_description, fill=COLOR_BLACK, font=loaded_fonts["text"])
+                          text=content.description, fill=COLOR_BLACK, font=loaded_fonts["text"])
                 x_position_widget_content_element += (calculated_font_spacings["text"] * 2 + text_width)
             # draw widget text
             draw.text((x_position_widget_content_element, y_position_widget_content),
-                      text=widget_text, fill=COLOR_BLACK, font=loaded_fonts["big"])
+                      text=content.text, fill=COLOR_BLACK, font=loaded_fonts["big"])
             y_position_widget_content += calculated_font_spacings["big"] + calculated_font_sizes["big"]
+            if content.images is not None and len(content.images) > 0:
+                for content_image in content.images:
+                    image.paste(content_image, (x_position_widget_content_element, int(y_position_widget_content)))
+                    x_position_widget_content_element += content_image.width
         y_position += widget_height + WIDGET_SPACING
 
     return image
+
+def create_qr_code(content: str, size: int) -> Image:
+    data = content
+    desired_size = size
+    # Calculate appropriate box_size and border
+    box_size = desired_size // 41  # Approximation (maximum QR size is 41x41 for version 1)
+    border = 4  # Standard minimum border size
+    qr = qrcode.QRCode(
+        version=1,  # Size of QR code (higher version = more data capacity)
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=box_size,
+        border=border
+    )
+    # Add data and create image
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    # Ensure exact dimensions
+    img = img.resize((desired_size, desired_size))
+    new_img = Image.new("RGB", img.size, "white")
+    new_img.paste(img, (0, 0))
+    return new_img

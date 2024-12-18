@@ -2,7 +2,6 @@ import asyncio
 import os
 import re
 from datetime import datetime, timedelta, date
-from logging import Logger
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Optional, NewType
@@ -46,7 +45,7 @@ def remove_measurements_ending_with_l(input_string):
     Removes substrings like '120l', '240l', or groups like '120l/240l', but keeps regular words like 'Restmüll'.
     """
     # Match standalone measurements or groups separated by '/'
-    filtered_string = re.sub(r'\b(?:\d+\w*l(?:/\d+\w*l)*)\b', '', input_string)
+    filtered_string = re.sub(r'\b\d+\w*l(?:/\d+\w*l)*\b', '', input_string)
 
     # Remove extra spaces caused by deletion
     return ' '.join(filtered_string.split())
@@ -177,17 +176,17 @@ class Plugin(PluginBase):
                     if trash_date.date() == tomorrow_time.date() and trash_date.date() != self.trash_taken_out_date:
                         self.trash_type_tomorrow = trash_type
 
-                        def take_out_trash():
+                        def take_out_trash(current_trash_date: date):
                             self.logger.debug(f"clicked black button: take_out_trash")
                             self.led_rgb_main.color = 0, 0, 0
                             self.led_rgb_info.color = 0, 0, 0
                             self.trash_type_tomorrow = None
-                            self.trash_taken_out_date = trash_date.date()
+                            self.trash_taken_out_date = current_trash_date
                             self.logger.debug(f"deregistered when pressed black button: take_out_trash {self.trash_taken_out_date=}")
                             self.button_black.when_pressed = None
 
                         self.logger.debug(f"registered when pressed black button: take_out_trash")
-                        self.button_black.when_pressed = take_out_trash
+                        self.button_black.when_pressed = lambda: take_out_trash(trash_date.date())
                         break
                 for trash_date, trash_type in self.current_trash_dates:
                     if trash_date.date() == current_time.date() and trash_date.date() != self.trash_brought_in_date:
@@ -215,12 +214,12 @@ class Plugin(PluginBase):
 
     async def request_widgets(self):
         if self.current_trash_dates is not None:
-            trash_dates: list[WidgetContent] = [WidgetContent(("Trash Dates", ""))]
+            trash_dates: list[WidgetContent] = [WidgetContent(description="Trash Dates", text="")]
             count = 0
             checksum = ""
             for trash_date, trash_type in self.current_trash_dates:
                 trash_date_str = trash_date.date().strftime('%d.%m.')
-                trash_dates.append(WidgetContent((trash_date_str, trash_type)))
+                trash_dates.append(WidgetContent(description=trash_date_str, text=trash_type))
                 checksum += trash_date_str + trash_type
                 count += 1
                 if count == 5:

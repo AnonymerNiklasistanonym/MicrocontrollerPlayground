@@ -90,9 +90,8 @@ class Plugin(PluginBase):
                 self.last_humidity = self.humidity[0]
                 change_detected = ChangeDetected(True)
             return [Widget(generate_content=lambda: [
-                WidgetContent(("Indoor:", "")),
-                WidgetContent(("Temperature", f"{self.temp[0]}°C")),
-                WidgetContent(("Relative humidity", f"{self.humidity[0]}%")),
+                WidgetContent(description="Indoor:", text=""),
+                WidgetContent(text=f"{self.temp[0]:.1f}°C / {self.humidity[0]:.0f}%"),
             ])], change_detected
         else:
             return [], ChangeDetected(False)

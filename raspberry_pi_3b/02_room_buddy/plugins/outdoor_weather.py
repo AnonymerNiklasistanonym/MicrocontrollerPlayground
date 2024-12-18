@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional, NewType
 
 from lib.plugins.plugin import PluginBase, ChangeDetected
-from lib.render.render import Widget, WidgetContent
+from lib.render.render import Widget, WidgetContent, create_qr_code
 from lib.sensors.dht22 import DHT22_TOLERANCE_TEMPERATURE, DHT22_TOLERANCE_HUMIDITY
 from .weather_db.weather_db import initialize_database, add_database_entry
 
@@ -32,6 +32,8 @@ class Plugin(PluginBase):
         self.tolerance_humidity = tolerance_humidity
         self.last_temp: Optional[TemperatureCelsius] = None
         self.last_humidity: Optional[RelativeHumidityPercent] = None
+        self.qr_code_data_visualizer_url: Optional[str] = None
+        self.qr_code_outdoor_weather_url: Optional[str] = None
 
     def temp_changed(self, old_temp: TemperatureCelsius | None, new_temp: TemperatureCelsius):
         return old_temp is None or abs(new_temp - old_temp) > self.tolerance_temp
@@ -55,6 +57,8 @@ class Plugin(PluginBase):
 
     async def run(self):
         """Periodically fetch data from the JSON endpoint."""
+        self.qr_code_data_visualizer_url = os.getenv('QR_CODE_DATA_VISUALIZER_URL', None)
+        self.qr_code_outdoor_weather_url = os.getenv('QR_CODE_OUTDOOR_WEATHER_URL', None)
         outdoor_weather_url = os.getenv('OUTDOOR_WEATHER_URL', '')
         if not outdoor_weather_url:
             raise RuntimeError("OUTDOOR_WEATHER_URL environment variable not set.")
@@ -112,10 +116,14 @@ class Plugin(PluginBase):
                 self.last_humidity = self.humidity[0]
                 change_detected = ChangeDetected(True)
 
+            images = []
+            if self.qr_code_data_visualizer_url:
+                images.append(create_qr_code(self.qr_code_data_visualizer_url, 100))
+            if self.qr_code_outdoor_weather_url:
+                images.append(create_qr_code(self.qr_code_outdoor_weather_url, 100))
             return [Widget(generate_content=lambda: [
-                WidgetContent(("Outdoor:", "")),
-                WidgetContent(("Temperature", f"{self.temp[0]}°C")),
-                WidgetContent(("Relative humidity", f"{self.humidity[0]}%")),
+                WidgetContent(description="Outdoor:", text=""),
+                WidgetContent(text=f"{self.temp[0]:.1f}°C / {self.humidity[0]:.0f}%", images=images),
             ])], change_detected
         else:
             return [], ChangeDetected(False)

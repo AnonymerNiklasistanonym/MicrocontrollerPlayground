@@ -10,6 +10,8 @@ StandardError=journal
 Restart=always
 Environment="CALENDAR_URL=https://api.abfall.io/?key=INSERT_CUSTOM&mode=export&idhousenumber=INSERT_CUSTOM&wastetypes=INSERT_CUSTOM&showinactive=false&type=ics"
 Environment="OUTDOOR_WEATHER_URL=http://192.168.2.158/json_measurements"
+Environment="QR_CODE_OUTDOOR_WEATHER_URL=http://192.168.2.158/measurements"
+Environment="QR_CODE_DATA_VISUALIZER_URL=http://192.168.2.157:3000"
 
 [Install]
 WantedBy=default.target
