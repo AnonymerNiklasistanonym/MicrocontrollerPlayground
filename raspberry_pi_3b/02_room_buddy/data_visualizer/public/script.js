@@ -51,7 +51,7 @@ function rollingThresholdFilter(windowSize, thresholdFactor, name) {
         return false;
     };
 }
-function differenceThresholdFilter(valueThreshold , name) {
+function differenceThresholdFilter(valueThreshold, name) {
     let lastValid = null;
 
     return function (current, index, array) {
@@ -63,15 +63,35 @@ function differenceThresholdFilter(valueThreshold , name) {
         return false;
     };
 }
-function dateRangeFilter(startDate, endDate , name) {
+
+/**
+ * Filter data based on a date range.
+ *
+ * @param {Date|undefined} startDate The start of the date range
+ * @param {Date|undefined} endDate The end of the date range
+ * @param {string} name Name of the data to be filtered
+ * @param {boolean} keepOneOutsideValue Get the previous and the next data point outside of the date range
+ */
+function dateRangeFilter(startDate, endDate, name, keepOneOutsideValue = true) {
+    /**
+     * @param {Date} date
+     */
+    const isInDateRange = date => (startDate !== undefined ? date >= startDate : true) && (endDate !== undefined ? date <= endDate : true)
     return function (current, index, array) {
-        if ((!isNaN(startDate) ? current.timestamp >= startDate : true) && (!isNaN(endDate) ? current.timestamp <= endDate : true)) {
+        const previous = array[index - 1];
+        const next = array[index + 1];
+        if (isInDateRange(current.timestamp)) {
+            return true;
+        }
+        if (keepOneOutsideValue && ((previous && isInDateRange(previous.timestamp)) || (next && isInDateRange(next.timestamp)))) {
+            console.warn(`KEEP DATA BECAUSE IT HAS A PREVIOUS ${isInDateRange(previous.timestamp)}/NEXT ${isInDateRange(next.timestamp)} VALUE THAT IS INSIDE THE DATE RANGE`, current.timestamp, { startDate, endDate })
             return true;
         }
         console.log(`Filter (date range) ${name} value ${current.value} (startDate=${startDate},endDate=${endDate})`)
         return false;
     };
 }
+
 function getLatestTimestamp(...lists) {
     let latest = null;
 
@@ -87,7 +107,7 @@ function getLatestTimestamp(...lists) {
 }
 function addLatestDataPoint(list, latestTimestamp) {
     if (latestTimestamp !== null && list.length > 0 && list[list.length - 1].timestamp !== latestTimestamp) {
-        list.push({...list[list.length - 1], timestamp: latestTimestamp});
+        list.push({ ...list[list.length - 1], timestamp: latestTimestamp });
     }
     return list;
 }
@@ -99,7 +119,7 @@ async function fetchData() {
     ]);
     console.log("read data:", indoorResponse, outdoorResponse)
 
-    return {indoorResponse,outdoorResponse};
+    return { indoorResponse, outdoorResponse };
 }
 
 function filterData(data, startDate, endDate) {
@@ -139,32 +159,52 @@ function filterData(data, startDate, endDate) {
         .filter(dateRangeFilter(startDate, endDate, "outdoorHumidity"));
 
     const latestTimestampTemperature = getLatestTimestamp(indoorTemperature, outdoorTemperature)
-    const latestTimestampHumidity = getLatestTimestamp( indoorHumidity, outdoorHumidity)
+    const latestTimestampHumidity = getLatestTimestamp(indoorHumidity, outdoorHumidity)
 
+    const colorOutdoor = "blue";
+    const colorIndoor = "red";
     return {
-        indoorTemperature:
-        {
-            clipped: indoorTemperature,
-            filtered: addLatestDataPoint(indoorTemperature.filter(rollingThresholdFilter(5, 1, "indoorTemperature")), latestTimestampTemperature),
-        },
-        outdoorTemperature: {
-            clipped: outdoorTemperature,
-            filtered: addLatestDataPoint(outdoorTemperature.filter(rollingThresholdFilter(5, 1, "outdoorTemperature")), latestTimestampTemperature),
-        },
-        indoorHumidity: {
+        temperatureGraphData:
+            [{
+                name: "Indoor",
+                color: colorIndoor,
+                clipped: indoorTemperature,
+                filtered: addLatestDataPoint(indoorTemperature.filter(rollingThresholdFilter(5, 1, "indoorTemperature")), latestTimestampTemperature),
+            },
+            {
+                name: "Outdoor",
+                color: colorOutdoor,
+                clipped: outdoorTemperature,
+                filtered: addLatestDataPoint(outdoorTemperature.filter(rollingThresholdFilter(5, 1, "outdoorTemperature")), latestTimestampTemperature),
+            }],
+        humidityGraphData: [{
+            name: "Indoor",
+            color: colorIndoor,
             clipped: indoorHumidity,
             filtered: addLatestDataPoint(indoorHumidity.filter(rollingThresholdFilter(5, 0.5, "indoorHumidity")), latestTimestampHumidity),
         },
-        outdoorHumidity: {
+        {
+            name: "Outdoor",
+            color: colorOutdoor,
             clipped: outdoorHumidity,
             filtered: addLatestDataPoint(outdoorHumidity.filter(rollingThresholdFilter(5, 0.5, "outdoorHumidity")), latestTimestampHumidity),
-        },
+        }]
     };
 }
 
-function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHumidity) {
-    const combinedTemperatureData = [...indoorTemperature.filtered, ...outdoorTemperature.filtered];
-    const combinedHumidityData = [...indoorHumidity.filtered, ...outdoorHumidity.filtered];
+/**
+ * Render the data in graphs
+ * @param {[{name:string;color:string;clipped:[{value:number;timestamp:Date}];filtered:[{value:number;timestamp:Date}]}]} temperatureGraphData
+ * @param {[{name:string;color:string;clipped:[{value:number;timestamp:Date}];filtered:[{value:number;timestamp:Date}]}]} humidityGraphData
+ * @param {{startDate?: Date;endDate?: Date}} dateClipRange
+ */
+function render(temperatureGraphData, humidityGraphData, dateClipRange) {
+    const { startDate, endDate } = dateClipRange;
+
+    const combinedTemperatureData = temperatureGraphData
+        .flatMap(dataset => dataset.filtered);
+    const combinedHumidityData = humidityGraphData
+        .flatMap(dataset => dataset.filtered);
 
     // Dimensions and margins for both graphs
     const margin = { top: 20, right: 20, bottom: 30, left: 80 },
@@ -180,11 +220,27 @@ function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHu
             .attr("transform", `translate(${margin.left},${margin.top})`);
     }
 
+    // Clipping path definition
+    function createClippingPath(svg, id, xScale, yScale) {
+        const clip = svg.append("defs").append("clipPath")
+            .attr("id", id);
+
+        // Use a rectangular clipping area based on the date range
+        clip.append("rect")
+            .attr("x", startDate ? xScale(startDate) : 0)
+            .attr("y", 0)
+            .attr("width", endDate ? xScale(endDate) - xScale(startDate || 0) : width)
+            .attr("height", height);
+    }
+
     // --- Temperature Graph ---
     const svgTemp = createSvg("temperatureChart");
 
     const xTempScale = d3.scaleTime()
-        .domain(d3.extent(combinedTemperatureData, d => d.timestamp))
+        .domain([
+            startDate || d3.min(combinedTemperatureData, d => d.timestamp),
+            endDate || d3.max(combinedTemperatureData, d => d.timestamp)
+        ])
         .range([0, width]);
 
     const yTempScale = d3.scaleLinear()
@@ -200,37 +256,29 @@ function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHu
 
     svgTemp.append("g").call(d3.axisLeft(yTempScale));
 
+    const clipIdTemp = "tempClip";
+    createClippingPath(svgTemp, clipIdTemp, xTempScale, yTempScale);
+
     const tempLine = d3.line()
         .x(d => xTempScale(d.timestamp))
         .y(d => yTempScale(d.value));
 
-    svgTemp.append("path")
-        .datum(indoorTemperature.filtered)
-        .attr("d", tempLine)
-        .style("stroke", "blue")
-        .style("fill", "none");
-
-    svgTemp.append("path")
-        .datum(outdoorTemperature.filtered)
-        .attr("d", tempLine)
-        .style("stroke", "red")
-        .style("fill", "none");
-
-    svgTemp.append("path")
-        .datum(indoorTemperature.clipped)
-        .attr("d", tempLine)
-        .style("stroke", "blue")
-        .style("stroke-opacity", 0.3)
-        .style("stroke-dasharray", "4,2")
-        .style("fill", "none");
-
-    svgTemp.append("path")
-        .datum(outdoorTemperature.clipped)
-        .attr("d", tempLine)
-        .style("stroke", "red")
-        .style("stroke-opacity", 0.3)
-        .style("stroke-dasharray", "4,2")
-        .style("fill", "none");
+    for (dataset of temperatureGraphData) {
+        svgTemp.append("path")
+            .datum(dataset.filtered)
+            .attr("d", tempLine)
+            .style("stroke", dataset.color)
+            .style("fill", "none")
+            .attr("clip-path", `url(#${clipIdTemp})`);
+        svgTemp.append("path")
+            .datum(dataset.clipped)
+            .attr("d", tempLine)
+            .style("stroke", dataset.color)
+            .style("stroke-opacity", 0.3)
+            .style("stroke-dasharray", "4,2")
+            .style("fill", "none")
+            .attr("clip-path", `url(#${clipIdTemp})`);
+    }
 
     svgTemp.append("text")
         .attr("x", width / 2)
@@ -245,21 +293,20 @@ function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHu
         .attr("text-anchor", "middle")
         .text("Temperature (°C)");
 
-    // Add legend for temperature chart
-    addLegend(svgTemp, width, ["Indoor (filtered)", "Outdoor (filtered)"], ["blue", "red"]);
+    addLegend(svgTemp, width * 0.75, temperatureGraphData.map(a => `${a.name} [filtered]`), temperatureGraphData.map(a => a.color));
 
     // --- Humidity Graph ---
     const svgHum = createSvg("humidityChart");
 
     const xHumScale = d3.scaleTime()
-        .domain(d3.extent(combinedHumidityData, d => d.timestamp))
+        .domain([
+            startDate || d3.min(combinedHumidityData, d => d.timestamp),
+            endDate || d3.max(combinedHumidityData, d => d.timestamp)
+        ])
         .range([0, width]);
 
     const yHumScale = d3.scaleLinear()
-        .domain([
-            d3.min(combinedHumidityData, d => d.value) - 5,
-            d3.max(combinedHumidityData, d => d.value) + 5
-        ])
+        .domain([0, 100])
         .range([height, 0]);
 
     svgHum.append("g")
@@ -268,37 +315,29 @@ function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHu
 
     svgHum.append("g").call(d3.axisLeft(yHumScale));
 
+    const clipIdHum = "humClip";
+    createClippingPath(svgHum, clipIdHum, xHumScale, yHumScale)
+
     const humLine = d3.line()
         .x(d => xHumScale(d.timestamp))
         .y(d => yHumScale(d.value));
 
-    svgHum.append("path")
-        .datum(indoorHumidity.filtered)
-        .attr("d", humLine)
-        .style("stroke", "blue")
-        .style("fill", "none");
-
-    svgHum.append("path")
-        .datum(outdoorHumidity.filtered)
-        .attr("d", humLine)
-        .style("stroke", "red")
-        .style("fill", "none");
-
-    svgHum.append("path")
-        .datum(indoorHumidity.clipped)
-        .attr("d", humLine)
-        .style("stroke", "blue")
-        .style("stroke-opacity", 0.3)
-        .style("stroke-dasharray", "4,2")
-        .style("fill", "none");
-
-    svgHum.append("path")
-        .datum(outdoorHumidity.clipped)
-        .attr("d", humLine)
-        .style("stroke", "red")
-        .style("stroke-opacity", 0.3)
-        .style("stroke-dasharray", "4,2")
-        .style("fill", "none");
+    for (dataset of humidityGraphData) {
+        svgHum.append("path")
+            .datum(dataset.filtered)
+            .attr("d", humLine)
+            .style("stroke", dataset.color)
+            .style("fill", "none")
+            .attr("clip-path", `url(#${clipIdHum})`);
+        svgHum.append("path")
+            .datum(dataset.clipped)
+            .attr("d", humLine)
+            .style("stroke", dataset.color)
+            .style("stroke-opacity", 0.3)
+            .style("stroke-dasharray", "4,2")
+            .style("fill", "none")
+            .attr("clip-path", `url(#${clipIdHum})`);
+    }
 
     svgHum.append("text")
         .attr("x", width / 2)
@@ -313,36 +352,31 @@ function render(indoorTemperature, outdoorTemperature, indoorHumidity, outdoorHu
         .attr("text-anchor", "middle")
         .text("Humidity (%)");
 
-    // Add legend for humidity chart
-    addLegend(svgHum, width, ["Indoor (filtered)", "Outdoor (filtered)"], ["blue", "red"]);
+    addLegend(svgHum, width * 0.75, humidityGraphData.map(a => `${a.name} [filtered]`), humidityGraphData.map(a => a.color));
 }
 
 // Load data
 fetchData().then(data => {
 
-    function refilterData() {
-        const startDate = new Date(document.getElementById("startDate").value);
-        const endDate = new Date(document.getElementById("endDate").value);
+    // Filter data based on date range input, then render it
+    function filterDataAndRender() {
+        const startDateValue = document.getElementById("startDate").value
+        const endDateValue = document.getElementById("endDate").value
+        const startDate = startDateValue === "" ? undefined : new Date(startDateValue);
+        const endDate = endDateValue === "" ? undefined : new Date(endDateValue);
 
-        refilteredData = filterData(data, startDate, endDate)
+        const filteredData = filterData(data, startDate, endDate)
         render(
-            refilteredData.indoorTemperature,
-            refilteredData.outdoorTemperature,
-            refilteredData.indoorHumidity,
-            refilteredData.outdoorHumidity,
+            filteredData.temperatureGraphData,
+            filteredData.humidityGraphData,
+            { data, startDate }
         );
     }
 
     // Event Listeners
-    document.getElementById("startDate").addEventListener("change", refilterData);
-    document.getElementById("endDate").addEventListener("change", refilterData);
+    document.getElementById("startDate").addEventListener("change", filterDataAndRender);
+    document.getElementById("endDate").addEventListener("change", filterDataAndRender);
 
     // Initial Render
-    const filteredData = filterData(data)
-    render(
-        filteredData.indoorTemperature,
-        filteredData.outdoorTemperature,
-        filteredData.indoorHumidity,
-        filteredData.outdoorHumidity,
-    );
-}).catch(err => consoler.error(err));
+    filterDataAndRender()
+}).catch(err => console.error(err));
