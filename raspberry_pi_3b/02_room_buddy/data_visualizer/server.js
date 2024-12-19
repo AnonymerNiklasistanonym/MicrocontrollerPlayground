@@ -8,78 +8,92 @@ const PORT = 3000;
 // Database files
 const INDOOR_DB = '../data/indoor_weather.db';
 const OUTDOOR_DB = '../data/outdoor_weather.db';
-const TABLE_NAME_TEMPERATURE = 'temperature_data';
-const COLUMN_NAME_TEMPERATURE = 'temperature_celsius';
-const TABLE_NAME_HUMIDITY = 'relative_humidity_data';
-const COLUMN_NAME_HUMIDITY = 'relative_humidity_percent';
-const OUTDOOR_DB_TABLE_NAMES = {
-    DHT22_TEMPERATURE: 'dht22_temperature_celsius',
-    DHT22_RELATIVE_HUMIDITY: 'dht22_relative_humidity_percent',
-    BMP280_TEMPERATURE: 'bmp280_temperature_celsius',
-    BMP280_AIR_PRESSURE: 'bmp280_air_pressure_pa',
-};
-const OUTDOOR_DB_COLUMN_NAMES = {
-    DHT22_TEMPERATURE: 'temperature_celsius',
-    DHT22_RELATIVE_HUMIDITY: 'relative_humidity_percent',
-    BMP280_TEMPERATURE: 'temperature_celsius',
-    BMP280_AIR_PRESSURE: 'air_pressure_pa',
-};
 
 // Serve static files (for D3.js and the chart)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Helper function to query data from a database
-function getWeatherData(dbFile, tableName, columnName, callback) {
-    const db = new sqlite3.Database(dbFile);
-    db.all(`SELECT timestamp, ${columnName} FROM ${tableName} ORDER BY timestamp`, (err, rows) => {
-        if (err) {
-            callback(err, null);
-        } else {
-            callback(null, rows);
-        }
-    });
-    db.close();
+function getDbDataInfo(id) {
+    switch (id) {
+        case 'dht22_temperature_celsius':
+        case 'bmp280_temperature_celsius':
+            return { tableName: id, valueColumnName: 'temperature_celsius' };
+        case 'bmp280_air_pressure_pa':
+            return { tableName: id, valueColumnName: 'air_pressure_pa' };
+        case 'dht22_relative_humidity_percent':
+            return { tableName: id, valueColumnName: 'relative_humidity_percent' };
+        default:
+            throw Error(`Unknown db data ${id}`);
+    }
 }
 
-// API endpoint for indoor data
-app.get('/api/indoor', (req, res) => {
-    getWeatherData(INDOOR_DB, TABLE_NAME_TEMPERATURE, COLUMN_NAME_TEMPERATURE, (err, temperatureData) => {
-        if (err) {
-            res.status(500).send({ error: 'Failed to fetch outdoor data.' });
-        } else {
-            getWeatherData(INDOOR_DB, TABLE_NAME_HUMIDITY, COLUMN_NAME_HUMIDITY, (err, humidityData) => {
-                if (err) {
-                    res.status(500).send({ error: 'Failed to fetch outdoor data.' });
-                } else {
-                    res.json({
-                        temperatureData,
-                        humidityData
-                    });
-                }
-            });
+function getDbData(dbFile, tableName, valueColumnName, startDate = null, endDate = null) {
+    return new Promise((resolve, reject) => {
+        const db = new sqlite3.Database(dbFile);
+
+        const whereQuery = [];
+        const params = [];
+
+        if (startDate) {
+            whereQuery.push("timestamp >= ?");
+            params.push(startDate);
         }
+        if (endDate) {
+            whereQuery.push("timestamp <= ?");
+            params.push(endDate);
+        }
+
+        const whereQueryString = whereQuery.length > 0 ? ` WHERE ${whereQuery.join(" AND ")}` : "";
+        const query = `SELECT timestamp, ${valueColumnName} AS value FROM ${tableName}${whereQueryString} ORDER BY timestamp`;
+
+        db.all(query, params, (err, rows) => {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(rows);
+            }
+        });
+
+        db.close();
     });
+}
+
+app.get('/api/:location(indoor|outdoor)/:id', async (req, res) => {
+    const { location, id } = req.params;
+    try {
+        const dbFile = location === "indoor" ? INDOOR_DB : location === "outdoor" ? OUTDOOR_DB : null;
+        if (dbFile === null) {
+            throw Error(`Unknown location ${location}`);
+        }
+        const { tableName, valueColumnName } = getDbDataInfo(id);
+        const data = await getDbData(dbFile, tableName, valueColumnName);
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({ error: 'An error occurred', details: err.message });
+    }
 });
 
-// API endpoint for outdoor data
-app.get('/api/outdoor', (req, res) => {
-    // TODO Support more values, add bmp280 support
-    getWeatherData(OUTDOOR_DB, OUTDOOR_DB_TABLE_NAMES.DHT22_TEMPERATURE, OUTDOOR_DB_COLUMN_NAMES.DHT22_TEMPERATURE, (err, temperatureData) => {
-        if (err) {
-            res.status(500).send({ error: 'Failed to fetch outdoor data.' });
-        } else {
-            getWeatherData(OUTDOOR_DB, OUTDOOR_DB_TABLE_NAMES.DHT22_RELATIVE_HUMIDITY, OUTDOOR_DB_COLUMN_NAMES.DHT22_RELATIVE_HUMIDITY, (err, humidityData) => {
-                if (err) {
-                    res.status(500).send({ error: 'Failed to fetch outdoor data.' });
-                } else {
-                    res.json({
-                        temperatureData,
-                        humidityData
-                    });
-                }
-            });
-        }
-    });
+app.get('/api/available_data', async (req, res) => {
+    try {
+        res.json({
+            'temperature_celsius': [{
+                name: 'dht22_temperature_celsius',
+                locations: ['indoor', 'outdoor']
+            }, {
+                name: 'bmp280_temperature_celsius',
+                locations: ['outdoor']
+            }],
+            'relative_humidity_percent': [{
+                name: 'dht22_relative_humidity_percent',
+                locations: ['indoor', 'outdoor']
+            }],
+            'air_pressure_pa': [{
+                name: 'bmp280_air_pressure_pa',
+                locations: ['outdoor']
+            }]
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'An error occurred', details: err.message });
+    }
 });
 
 // Start the server

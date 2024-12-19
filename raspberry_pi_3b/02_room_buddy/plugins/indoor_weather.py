@@ -51,8 +51,8 @@ class Plugin(PluginBase):
     async def run(self):
         """Simulate temperature data collection"""
         initialize_database(DB_INDOOR_WEATHER, [
-            ("temperature_data", "temperature_celsius", "REAL"),
-            ("relative_humidity_data", "relative_humidity_percent", "REAL")
+            ("dht22_temperature_celsius", "temperature_celsius", "REAL"),
+            ("dht22_relative_humidity_percent", "dht22_relative_humidity_percent", "REAL")
         ])
         while True:
             try:
@@ -66,12 +66,12 @@ class Plugin(PluginBase):
                     if self.temp_changed(None if self.temp is None else self.temp[0], temp):
                         self.logger.info(f"Detected change: {temp=:.1f}")
                         self.temp = temp, current_time
-                        add_database_entry(DB_INDOOR_WEATHER, "temperature_data", "temperature_celsius",
+                        add_database_entry(DB_INDOOR_WEATHER, "dht22_temperature_celsius", "temperature_celsius",
                                            current_time, temp)
                     if self.humidity_changed(None if self.humidity is None else self.humidity[0], humidity):
                         self.logger.info(f"Detected change: {humidity=:.1f}")
                         self.humidity = humidity, current_time
-                        add_database_entry(DB_INDOOR_WEATHER, "relative_humidity_data", "relative_humidity_percent",
+                        add_database_entry(DB_INDOOR_WEATHER, "dht22_relative_humidity_percent", "relative_humidity_percent",
                                            current_time, humidity)
                 else:
                     self.logger.warning(f"Read from DHT22: Failed to read data.")

@@ -113,83 +113,55 @@ function addLatestDataPoint(list, latestTimestamp) {
 }
 
 async function fetchData() {
-    const [indoorResponse, outdoorResponse] = await Promise.all([
-        fetch('/api/indoor').then(res => res.json()),
-        fetch('/api/outdoor').then(res => res.json())
-    ]);
-    console.log("read data:", indoorResponse, outdoorResponse)
-
-    return { indoorResponse, outdoorResponse };
+    const availableData = await fetch('/api/available_data').then(res => res.json());
+    const data = {};
+    for (const [category, sensors] of Object.entries(availableData)) {
+        data[category] = {};
+        for (const sensor of sensors) {
+            const {name,locations} = sensor;
+            for (const location of locations) {
+                data[category][`${name} (${location})`] = await fetch(`/api/${location}/${name}`).then(res => res.json());
+            }
+        }
+    }
+    console.log(data);
+    return data;
 }
 
 function filterData(data, startDate, endDate) {
-    const dht22MinTemperatureCelsius = -40
-    const dht22MaxTemperatureCelsius = 80
-    const dht22MinRelativeHumidityPercent = 0
-    const dht22MaxRelativeHumidityPercent = 100
 
-    const indoorTemperature = data.indoorResponse.temperatureData
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.temperature_celsius
-        }))
-        .filter(clipFilter(dht22MinTemperatureCelsius, dht22MaxTemperatureCelsius, "indoorTemperature"))
-        .filter(dateRangeFilter(startDate, endDate, "indoorTemperature"));
-    const indoorHumidity = data.indoorResponse.humidityData
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.relative_humidity_percent
-        }))
-        .filter(clipFilter(dht22MinRelativeHumidityPercent, dht22MaxRelativeHumidityPercent, "indoorHumidity"))
-        .filter(dateRangeFilter(startDate, endDate, "indoorHumidity"));
+    const filteredData = {};
+    for (const [category, sensor_data] of Object.entries(data)) {
+        filteredData[category] = {};
+        for (const [sensor, sensor_data_entry] of Object.entries(sensor_data)) {
+            filteredData[category][sensor] = {};
+            filteredData[category][sensor]["clipped"] = sensor_data_entry.map(a => ({
+                ...a,
+                timestamp: new Date(a.timestamp),
+            })).filter(dateRangeFilter(startDate, endDate, sensor));
+            if (category === "temperature_celsius") {
+                if (sensor.startsWith("dht22")) {
+                    filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(-40, 80, sensor));
+                }
+                if (sensor.startsWith("bmp280")) {
+                    filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(-40, 85, sensor));
+                }
+            }
+            if (category === "relative_humidity_percent") {
+                if (sensor.startsWith("dht22")) {
+                    filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(0, 100, sensor));
+                }
+            }
+            if (category === "air_pressure_pa") {
+                if (sensor.startsWith("bmp280")) {
+                    filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(300 * 100, 1100 * 100, sensor));
+                }
+            }
+            filteredData[category][sensor]["filtered"] = filteredData[category][sensor]["clipped"].filter(rollingThresholdFilter(5, 1, sensor));
+        }
+    }
 
-    const outdoorTemperature = data.outdoorResponse.temperatureData
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.temperature_celsius
-        }))
-        .filter(clipFilter(dht22MinTemperatureCelsius, dht22MaxTemperatureCelsius, "outdoorTemperature"))
-        .filter(dateRangeFilter(startDate, endDate, "outdoorTemperature"));
-    const outdoorHumidity = data.outdoorResponse.humidityData
-        .map(d => ({
-            timestamp: new Date(d.timestamp),
-            value: d.relative_humidity_percent
-        }))
-        .filter(clipFilter(dht22MinRelativeHumidityPercent, dht22MaxRelativeHumidityPercent, "outdoorHumidity"))
-        .filter(dateRangeFilter(startDate, endDate, "outdoorHumidity"));
-
-    const latestTimestampTemperature = getLatestTimestamp(indoorTemperature, outdoorTemperature)
-    const latestTimestampHumidity = getLatestTimestamp(indoorHumidity, outdoorHumidity)
-
-    const colorOutdoor = "blue";
-    const colorIndoor = "red";
-    return {
-        temperatureGraphData:
-            [{
-                name: "Indoor",
-                color: colorIndoor,
-                clipped: indoorTemperature,
-                filtered: addLatestDataPoint(indoorTemperature.filter(rollingThresholdFilter(5, 1, "indoorTemperature")), latestTimestampTemperature),
-            },
-            {
-                name: "Outdoor",
-                color: colorOutdoor,
-                clipped: outdoorTemperature,
-                filtered: addLatestDataPoint(outdoorTemperature.filter(rollingThresholdFilter(5, 1, "outdoorTemperature")), latestTimestampTemperature),
-            }],
-        humidityGraphData: [{
-            name: "Indoor",
-            color: colorIndoor,
-            clipped: indoorHumidity,
-            filtered: addLatestDataPoint(indoorHumidity.filter(rollingThresholdFilter(5, 0.5, "indoorHumidity")), latestTimestampHumidity),
-        },
-        {
-            name: "Outdoor",
-            color: colorOutdoor,
-            clipped: outdoorHumidity,
-            filtered: addLatestDataPoint(outdoorHumidity.filter(rollingThresholdFilter(5, 0.5, "outdoorHumidity")), latestTimestampHumidity),
-        }]
-    };
+    return filteredData
 }
 
 /**
@@ -198,21 +170,28 @@ function filterData(data, startDate, endDate) {
  * @param {[{name:string;color:string;clipped:[{value:number;timestamp:Date}];filtered:[{value:number;timestamp:Date}]}]} humidityGraphData
  * @param {{startDate?: Date;endDate?: Date}} dateClipRange
  */
-function render(temperatureGraphData, humidityGraphData, dateClipRange) {
+function render(data, dateClipRange) {
     const { startDate, endDate } = dateClipRange;
 
-    const combinedTemperatureData = temperatureGraphData
-        .flatMap(dataset => dataset.filtered);
-    const combinedHumidityData = humidityGraphData
-        .flatMap(dataset => dataset.filtered);
-
     // Dimensions and margins for both graphs
-    const margin = { top: 20, right: 20, bottom: 30, left: 80 },
+    const margin = { top: 20, right: 20, bottom: 40, left: 100 },
         width = 800 - margin.left - margin.right,
         height = 300 - margin.top - margin.bottom;
 
+    function removeElement(id) {
+        var elem = document.getElementById(id);
+        if (elem !== null) {
+            elem.parentNode.removeChild(elem);
+        }
+    }
+
     // Function to create an SVG container
     function createSvg(id) {
+        removeElement(id);
+        const chartsDiv = document.getElementById("charts");
+        const chart = document.createElement("div");
+        chart.id = id;
+        chartsDiv.appendChild(chart);
         return d3.select(`#${id}`).html("").append("svg")
             .attr("width", width + margin.left + margin.right)
             .attr("height", height + margin.top + margin.bottom)
@@ -233,126 +212,102 @@ function render(temperatureGraphData, humidityGraphData, dateClipRange) {
             .attr("height", height);
     }
 
-    // --- Temperature Graph ---
-    const svgTemp = createSvg("temperatureChart");
+    for (const [category, sensorData] of Object.entries(data)) {
+        const combinedFilteredData = Object.entries(sensorData).flatMap(([name, dataset]) => dataset.filtered);
 
-    const xTempScale = d3.scaleTime()
-        .domain([
-            startDate || d3.min(combinedTemperatureData, d => d.timestamp),
-            endDate || d3.max(combinedTemperatureData, d => d.timestamp)
-        ])
-        .range([0, width]);
+        const svg = createSvg(`${category}Chart`);
 
-    const yTempScale = d3.scaleLinear()
-        .domain([
-            d3.min(combinedTemperatureData, d => d.value) - 5,
-            d3.max(combinedTemperatureData, d => d.value) + 5
-        ])
-        .range([height, 0]);
+        const xTimeScale = d3.scaleTime()
+            .domain([
+                startDate || d3.min(combinedFilteredData, d => d.timestamp),
+                endDate || d3.max(combinedFilteredData, d => d.timestamp)
+            ])
+            .range([0, width]);
 
-    svgTemp.append("g")
-        .attr("transform", `translate(0,${height})`)
-        .call(d3.axisBottom(xTempScale));
+        let yValueScale;
+        let unit;
 
-    svgTemp.append("g").call(d3.axisLeft(yTempScale));
+        if (category === "temperature_celsius") {
+            unit = "Temperature (°C)";
+            yValueScale = d3.scaleLinear()
+            .domain([
+                d3.min(combinedFilteredData, d => d.value - 5),
+                d3.max(combinedFilteredData, d => d.value + 5),
+            ])
+            .range([height, 0]);
+        }
+        if (category === "relative_humidity_percent") {
+            unit = "Relative Humidity (%)";
+            yValueScale = d3.scaleLinear()
+                .domain([
+                    0,
+                    100,
+                ])
+                .range([height, 0]);
+        }
+        if (category === "air_pressure_pa") {
+            unit = "Air Pressure (Pa)";
+            yValueScale = d3.scaleLinear()
+                .domain([
+                    d3.min(combinedFilteredData, d => d.value - 500),
+                    d3.max(combinedFilteredData, d => d.value + 500),
+                ])
+                .range([height, 0]);
+        }
 
-    const clipIdTemp = "tempClip";
-    createClippingPath(svgTemp, clipIdTemp, xTempScale, yTempScale);
+        svg.append("g")
+            .attr("transform", `translate(0,${height})`)
+            .call(d3.axisBottom(xTimeScale));
 
-    const tempLine = d3.line()
-        .x(d => xTempScale(d.timestamp))
-        .y(d => yTempScale(d.value));
+        svg.append("g").call(d3.axisLeft(yValueScale));
 
-    for (dataset of temperatureGraphData) {
-        svgTemp.append("path")
-            .datum(dataset.filtered)
-            .attr("d", tempLine)
-            .style("stroke", dataset.color)
-            .style("fill", "none")
-            .attr("clip-path", `url(#${clipIdTemp})`);
-        svgTemp.append("path")
-            .datum(dataset.clipped)
-            .attr("d", tempLine)
-            .style("stroke", dataset.color)
-            .style("stroke-opacity", 0.3)
-            .style("stroke-dasharray", "4,2")
-            .style("fill", "none")
-            .attr("clip-path", `url(#${clipIdTemp})`);
+        const clipId = `${category}Clip`;
+        createClippingPath(svg, clipId, xTimeScale, yValueScale);
+
+        const line = d3.line()
+            .x(d => xTimeScale(d.timestamp))
+            .y(d => yValueScale(d.value));
+
+        const colors = d3.scaleOrdinal(d3.schemeCategory10);
+        let colorId = 0;
+        const legendNames = [];
+        const legendColors = [];
+        for (const [name, dataset] of Object.entries(sensorData)) {
+            const color = colors(colorId);
+            colorId += 1;
+            legendNames.push(name);
+            legendColors.push(color);
+            console.warn({ name, color, dataset});
+            svg.append("path")
+                .datum(dataset.filtered)
+                .attr("d", line)
+                .style("stroke", color)
+                .style("fill", "none")
+                .attr("clip-path", `url(#${clipId})`);
+            svg.append("path")
+                .datum(dataset.clipped)
+                .attr("d", line)
+                .style("stroke", color)
+                .style("stroke-opacity", 0.3)
+                .style("stroke-dasharray", "4,2")
+                .style("fill", "none")
+                .attr("clip-path", `url(#${clipId})`);
+        }
+        svg.append("text")
+            .attr("x", width / 2)
+            .attr("y", height + margin.bottom)
+            .attr("text-anchor", "middle")
+            .text("Time");
+
+        svg.append("text")
+            .attr("transform", "rotate(-90)")
+            .attr("x", -height / 2)
+            .attr("y", -margin.left / 2)
+            .attr("text-anchor", "middle")
+            .text(unit);
+
+        addLegend(svg, width * 0.75, legendNames, legendColors);
     }
-
-    svgTemp.append("text")
-        .attr("x", width / 2)
-        .attr("y", height + margin.bottom)
-        .attr("text-anchor", "middle")
-        .text("Time");
-
-    svgTemp.append("text")
-        .attr("transform", "rotate(-90)")
-        .attr("x", -height / 2)
-        .attr("y", -margin.left + 40)
-        .attr("text-anchor", "middle")
-        .text("Temperature (°C)");
-
-    addLegend(svgTemp, width * 0.75, temperatureGraphData.map(a => `${a.name} [filtered]`), temperatureGraphData.map(a => a.color));
-
-    // --- Humidity Graph ---
-    const svgHum = createSvg("humidityChart");
-
-    const xHumScale = d3.scaleTime()
-        .domain([
-            startDate || d3.min(combinedHumidityData, d => d.timestamp),
-            endDate || d3.max(combinedHumidityData, d => d.timestamp)
-        ])
-        .range([0, width]);
-
-    const yHumScale = d3.scaleLinear()
-        .domain([0, 100])
-        .range([height, 0]);
-
-    svgHum.append("g")
-        .attr("transform", `translate(0,${height})`)
-        .call(d3.axisBottom(xHumScale));
-
-    svgHum.append("g").call(d3.axisLeft(yHumScale));
-
-    const clipIdHum = "humClip";
-    createClippingPath(svgHum, clipIdHum, xHumScale, yHumScale)
-
-    const humLine = d3.line()
-        .x(d => xHumScale(d.timestamp))
-        .y(d => yHumScale(d.value));
-
-    for (dataset of humidityGraphData) {
-        svgHum.append("path")
-            .datum(dataset.filtered)
-            .attr("d", humLine)
-            .style("stroke", dataset.color)
-            .style("fill", "none")
-            .attr("clip-path", `url(#${clipIdHum})`);
-        svgHum.append("path")
-            .datum(dataset.clipped)
-            .attr("d", humLine)
-            .style("stroke", dataset.color)
-            .style("stroke-opacity", 0.3)
-            .style("stroke-dasharray", "4,2")
-            .style("fill", "none")
-            .attr("clip-path", `url(#${clipIdHum})`);
-    }
-
-    svgHum.append("text")
-        .attr("x", width / 2)
-        .attr("y", height + margin.bottom)
-        .attr("text-anchor", "middle")
-        .text("Time");
-
-    svgHum.append("text")
-        .attr("transform", "rotate(-90)")
-        .attr("x", -height / 2)
-        .attr("y", -margin.left + 40)
-        .attr("text-anchor", "middle")
-        .text("Humidity (%)");
-
-    addLegend(svgHum, width * 0.75, humidityGraphData.map(a => `${a.name} [filtered]`), humidityGraphData.map(a => a.color));
 }
 
 // Load data
@@ -366,11 +321,7 @@ fetchData().then(data => {
         const endDate = endDateValue === "" ? undefined : new Date(endDateValue);
 
         const filteredData = filterData(data, startDate, endDate)
-        render(
-            filteredData.temperatureGraphData,
-            filteredData.humidityGraphData,
-            { data, startDate }
-        );
+        render(filteredData, { startDate, endDate });
     }
 
     // Event Listeners
