@@ -222,7 +222,7 @@ class Plugin(PluginBase):
                 trash_dates.append(WidgetContent(description=trash_date_str, text=trash_type))
                 checksum += trash_date_str + trash_type
                 count += 1
-                if count == 5:
+                if count == 7:
                     break
             change_detected = ChangeDetected(self.last_checksum_widgets != checksum)
             self.last_checksum_widgets = checksum

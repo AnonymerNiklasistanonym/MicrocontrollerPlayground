@@ -4,11 +4,13 @@ import time
 import os
 import ntptime
 import ujson
-from machine import Pin, Timer
+from machine import I2C, Pin, Timer
 from dht import DHT22
 
+from bmp280 import *
+
 from wifi_config import SSID, PASSWORD
-from pins_config import GPIO_PIN_INPUT_DHT22
+from pins_config import GPIO_PIN_INPUT_DHT22, GPIO_PIN_I2C_BMP280_SDA, GPIO_PIN_I2C_BMP280_SCL
 from free_storage import df, ramf, convert_to_human_readable_str
 from timestamp import get_iso_timestamp
 from time_difference import get_time_difference
@@ -16,48 +18,93 @@ from print_history import PrintHistory
 from html_helper import generate_html, generate_html_list, generate_html_table
 
 
+BMP280_FREQUENCY_I2C = const(100000)                # Hertz (default 100kHz higher, fast mode 400kHz)
+BMP280_FREQUENCY = const(157)                       # Hertz (WARNING: every 6.4ms!)
+BMP280_TOLERANCE_AIR_PRESSURE = const(1 * 100)      # Pascal (Pascal * 100 to convert from Hectopascal)
+BMP280_RANGE_AIR_PRESSURE = (300 * 100, 1100 * 100)
+BMP280_TOLERANCE_TEMPERATURE = const(0.5)           # Degrees Celsius
+BMP280_RANGE_TEMPERATURE = (-40, 85)
+
+DHT22_FREQUENCY = const(0.5)                   # Hertz
+DHT22_TOLERANCE_TEMPERATURE = const(0.5)       # Degrees Celsius
+DHT22_RANGE_TEMPERATURE = (-40, 80)
+DHT22_TOLERANCE_RELATIVE_HUMIDITY = const(2.0) # Percent
+DHT22_RANGE_RELATIVE_HUMIDITY = (0, 100)
+
+SENSOR_ID_BMP280 = const("bmp280")
+SENSOR_ID_DHT22 = const("dht22")
+
+MEASUREMENT_ID_BMP280_TEMPERATURE = f"{SENSOR_ID_BMP280}_temperature_celsius"
+MEASUREMENT_ID_BMP280_AIR_PRESSURE = f"{SENSOR_ID_BMP280}_air_pressure_pa"
+
+MEASUREMENT_ID_DHT22_TEMPERATURE = f"{SENSOR_ID_DHT22}_temperature_celsius"
+MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = f"{SENSOR_ID_DHT22}_relative_humidity_percent"
+
 # DHT22
 dht22_sensor = DHT22(Pin(GPIO_PIN_INPUT_DHT22))
-MEASUREMENT_ID_DHT22_TEMPERATURE = const("dht22_temperature_celsius")
-MEASUREMENT_ID_DHT22_HUMIDITY = const("dht22_relative_humidity_percent")
-dht22_sensor_stabalized = False
-sensor_unit = {  # Name of measured value unit
-    MEASUREMENT_ID_DHT22_TEMPERATURE: "°C",
-    MEASUREMENT_ID_DHT22_HUMIDITY: "%",
-}
-sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabalized
-    MEASUREMENT_ID_DHT22_TEMPERATURE: (None, 5),
-    MEASUREMENT_ID_DHT22_HUMIDITY: (None, 5),
-}
-sensor_tolerances = {  # min, max
-    MEASUREMENT_ID_DHT22_TEMPERATURE: 0.5,  # Degrees Celsius
-    MEASUREMENT_ID_DHT22_HUMIDITY: 2.0,  # Percent
-}
-sensor_ranges = {  # min, max
-    MEASUREMENT_ID_DHT22_TEMPERATURE: (-40, 80),
-    MEASUREMENT_ID_DHT22_HUMIDITY: (0, 100),
-}
-sensor_frequencies = {"dht22": 0.5}  # Hertz  # (1 / 0.5 Hertz = 2 Seconds)
+
+# BMP280
+bmp280_sensor_i2c = I2C(0, sda=Pin(GPIO_PIN_I2C_BMP280_SDA), scl=Pin(GPIO_PIN_I2C_BMP280_SCL), freq=BMP280_FREQUENCY_I2C)
+bmp280_sensor = BMP280(bmp280_sensor_i2c)
+bmp280_sensor.use_case(BMP280_CASE_WEATHER)
+
 # Onboard-LED
 led_onboard = Pin("LED", Pin.OUT)
 
+# Sensor stabilization
+sensor_stabilized = {  # Stabalized
+    SENSOR_ID_BMP280: False,
+    SENSOR_ID_DHT22: False,
+}
+SENSOR_STABILIZE_COUNT = const(100)
+sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabalized
+    MEASUREMENT_ID_DHT22_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: (None, SENSOR_STABILIZE_COUNT),
+    MEASUREMENT_ID_BMP280_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: (None, SENSOR_STABILIZE_COUNT),
+}
+
+# Sensor information
+sensor_unit = {  # Name of measured value unit
+    MEASUREMENT_ID_DHT22_TEMPERATURE: "°C",
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: "%",
+    MEASUREMENT_ID_BMP280_TEMPERATURE: "°C",
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: "Pa",
+}
+sensor_tolerances = {  # min, max
+    MEASUREMENT_ID_DHT22_TEMPERATURE: DHT22_TOLERANCE_TEMPERATURE,
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: DHT22_TOLERANCE_RELATIVE_HUMIDITY,
+    MEASUREMENT_ID_BMP280_TEMPERATURE: BMP280_TOLERANCE_TEMPERATURE,
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: BMP280_TOLERANCE_AIR_PRESSURE,
+}
+sensor_ranges = {  # min, max
+    MEASUREMENT_ID_DHT22_TEMPERATURE: DHT22_RANGE_TEMPERATURE,
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: DHT22_RANGE_RELATIVE_HUMIDITY,
+    MEASUREMENT_ID_BMP280_TEMPERATURE: BMP280_RANGE_TEMPERATURE,
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: BMP280_RANGE_AIR_PRESSURE,
+}
+
 # Store measurements as separate lists for temperature and humidity
+BUFFER_COUNT = const(20) # The amount of values to keep in the buffers
 buffer_readings = {  # (value: number, iso timestamp: str)
     MEASUREMENT_ID_DHT22_TEMPERATURE: [],
-    MEASUREMENT_ID_DHT22_HUMIDITY: [],
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: [],
+    MEASUREMENT_ID_BMP280_TEMPERATURE: [],
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: [],
 }
 counter_readings = {  # good readings, bad readings
     MEASUREMENT_ID_DHT22_TEMPERATURE: {"good": 0, "bad": 0},
-    MEASUREMENT_ID_DHT22_HUMIDITY: {"good": 0, "bad": 0},
-    "dht22": {"good": 0},
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: {"good": 0, "bad": 0},
+    MEASUREMENT_ID_BMP280_TEMPERATURE: {"good": 0, "bad": 0},
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: {"good": 0, "bad": 0},
+    SENSOR_ID_DHT22: {"good": 0},
+    SENSOR_ID_BMP280: {"good": 0},
 }
-# The amount of values to keep in the buffers
-BUFFER_COUNT = const(32)
 
-# Store uptime
+# Track uptime
 time_init = time.time()
 
-# Create an instance of PrintHistory
+# Track recent logs
 print_history_instance = PrintHistory()
 
 
@@ -101,57 +148,74 @@ def sync_time():
         )
     except Exception as e:
         print_history("Failed to sync time:", e)
+       
 
-
-def read_dht22(timer):
-    global dht22_sensor_stabalized
+def read_sensor(timer, sensor_id):
+    global sensor_stabilized
     global sensor_stabilized_last_values
     global buffer_readings
     global counter_readings
-
+    
     try:
-        dht22_sensor.measure()
-        temp = dht22_sensor.temperature()
-        humidity = dht22_sensor.humidity()
+        sensor_measurements = []
         timestamp = get_iso_timestamp()
-        counter_readings["dht22"]["good"] += 1
+        
+        print(f"read_sensor {sensor_id}")
 
-        sensor_measurements = [
-            (temp, MEASUREMENT_ID_DHT22_TEMPERATURE),
-            (humidity, MEASUREMENT_ID_DHT22_HUMIDITY),
-        ]
+        if sensor_id == SENSOR_ID_BMP280:
+            temp = bmp280_sensor.temperature
+            pressure = bmp280_sensor.pressure
+            
+            sensor_measurements = [
+                (temp, MEASUREMENT_ID_BMP280_TEMPERATURE),
+                (pressure, MEASUREMENT_ID_BMP280_AIR_PRESSURE),
+            ]
+        elif sensor_id == SENSOR_ID_DHT22:
+            dht22_sensor.measure()
+            temp = dht22_sensor.temperature()
+            humidity = dht22_sensor.humidity()
 
-        if not dht22_sensor_stabalized:
+            sensor_measurements = [
+                (temp, MEASUREMENT_ID_DHT22_TEMPERATURE),
+                (humidity, MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY),
+            ]
+        else:
+            raise RuntimeError("Unknown {sensor_id=}")
+
+        counter_readings[sensor_id]["good"] += 1
+
+        if not sensor_stabilized[sensor_id]:
             changes_detected = False
             for value, measurement_id in sensor_measurements:
-                dht22_sensor_stabilized_last_value, count = (
+                sensor_stabilized_last_value, count = (
                     sensor_stabilized_last_values[measurement_id]
                 )
                 sensor_tolerance = sensor_tolerances[measurement_id]
-                if dht22_sensor_stabilized_last_value is None:
+                if sensor_stabilized_last_value is None:
                     sensor_stabilized_last_values[measurement_id] = value, count
                     changes_detected = True
                     print_history(
-                        f"[DHT22:{measurement_id}] sensor not stabalized: missing last_value"
+                        f"[{measurement_id}] sensor not stabalized: missing last_value"
                     )
-                elif abs(value - dht22_sensor_stabilized_last_value) > sensor_tolerance:
+                elif abs(value - sensor_stabilized_last_value) > sensor_tolerance:
+                    sensor_stabilized_last_values[measurement_id] = value, SENSOR_STABILIZE_COUNT
                     changes_detected = True
                     print_history(
-                        f"[DHT22:{measurement_id}] sensor not stabalized: detected change outside of tolerances"
+                        f"[{measurement_id}] sensor not stabalized: detected change outside of tolerances"
                     )
                 elif count != 0:
                     changes_detected = True
                     print_history(
-                        f"[DHT22:{measurement_id}] sensor not stabalized: detected no change but wait {count} more times"
+                        f"[{measurement_id}] sensor not stabalized: detected no change but wait {count} more times"
                     )
                     sensor_stabilized_last_values[measurement_id] = value, count - 1
                 else:
                     print_history(
-                        f"[DHT22:{measurement_id}] sensor partly stabalized: detected no change"
+                        f"[{measurement_id}] sensor partly stabalized: detected no change"
                     )
             if not changes_detected:
-                print_history(f"[DHT22] sensor stabalized: no changes detected")
-                dht22_sensor_stabalized = True
+                print_history(f"[{sensor_id}] sensor stabalized: no changes detected")
+                sensor_stabilized[sensor_id] = True
 
         for value, measurement_id in sensor_measurements:
             unit = sensor_unit[measurement_id]
@@ -166,9 +230,9 @@ def read_dht22(timer):
             min_value, max_value = sensor_ranges[measurement_id]
             within_range = value >= min_value and value <= max_value
 
-            if change_detected and within_range and dht22_sensor_stabalized:
+            if change_detected and within_range and sensor_stabilized[sensor_id]:
                 print_history(
-                    f"[DHT22:{measurement_id}] Recorded: {value}{unit} at {timestamp}"
+                    f"[{measurement_id}] Recorded: {value}{unit} at {timestamp}"
                 )
                 buffer.append([value, timestamp])
                 if len(buffer) > BUFFER_COUNT:
@@ -180,22 +244,30 @@ def read_dht22(timer):
                         f"value not within range [{min_value}{unit},{max_value}{unit}]"
                     )
                     counter_readings[measurement_id]["bad"] += 1
-                elif not dht22_sensor_stabalized:
+                elif not sensor_stabilized[sensor_id]:
                     reason = f"sensor stabilization ongoing"
 
                 print_history(
-                    f"[DHT22:{measurement_id}] Skipped: current {value}{unit} ({reason})"
+                    f"[{measurement_id}] Skipped: current {value}{unit} ({reason})"
                 )
 
-            if within_range and dht22_sensor_stabalized:
+            if within_range and sensor_stabilized[sensor_id]:
                 counter_readings[measurement_id]["good"] += 1
 
     except Exception as e:
-        print_history("[DHT22] Error reading sensor:", e)
-        if e in counter_readings["dht22"]:
-            counter_readings["dht22"][e] += 1
+        print_history(f"[{sensor_id}] Error reading sensor:", e)
+        if e in counter_readings[sensor_id]:
+            counter_readings[sensor_id][e] += 1
         else:
-            counter_readings["dht22"][e] = 1
+            counter_readings[sensor_id][e] = 1
+
+
+def read_dht22(timer):
+    read_sensor(timer, SENSOR_ID_DHT22)
+
+
+def read_bmp280(timer):
+    read_sensor(timer, SENSOR_ID_BMP280)
 
 
 def render_html():
@@ -203,12 +275,16 @@ def render_html():
     Renders the HTML page displaying the temperature and humidity records in tables.
     """
     html = "<h1>Sensor Data</h1>"
+    html += '<button onclick="window.location.href=\'/json_measurements\';">View JSON Measurements</button>'
 
     for name, measurement_id in [
-        ("Temperature", MEASUREMENT_ID_DHT22_TEMPERATURE),
-        ("Relative Humidity", MEASUREMENT_ID_DHT22_HUMIDITY),
+        ("DHT22 Temperature", MEASUREMENT_ID_DHT22_TEMPERATURE),
+        ("DHT22 Relative Humidity", MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY),
+        ("BMP280 Temperature", MEASUREMENT_ID_BMP280_TEMPERATURE),
+        ("BMP280 Air Pressure", MEASUREMENT_ID_BMP280_AIR_PRESSURE),
     ]:
         html += f"<h2>{name} Records</h2>"
+
 
         unit = sensor_unit[measurement_id]
         buffer = buffer_readings[measurement_id]
@@ -337,9 +413,14 @@ def main():
     time_init = time.time()
 
     # Start the periodic sensor reading
-    sensor_timer = Timer()
-    sensor_timer.init(
-        freq=sensor_frequencies["dht22"], mode=Timer.PERIODIC, callback=read_dht22
+    dht22_timer = Timer(-1)
+    dht22_timer.init(
+        freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22
+    )
+    # WARNING: Default frequency of BMP280 is too fast (use 1s instead)
+    bmp280_timer = Timer(-1)
+    bmp280_timer.init(
+        period=1000, mode=Timer.PERIODIC, callback=read_bmp280
     )
 
     # Start the web server
