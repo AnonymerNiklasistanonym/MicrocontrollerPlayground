@@ -10,25 +10,43 @@ from dht import DHT22
 from bmp280 import *
 
 from wifi_config import SSID, PASSWORD
-from pins_config import GPIO_PIN_INPUT_DHT22, GPIO_PIN_I2C_BMP280_SDA, GPIO_PIN_I2C_BMP280_SCL
+from pins_config import (
+    GPIO_PIN_INPUT_DHT22,
+    GPIO_PIN_I2C_BMP280_SDA,
+    GPIO_PIN_I2C_BMP280_SCL,
+)
 from free_storage import df, ramf, convert_to_human_readable_str
 from timestamp import get_iso_timestamp
 from time_difference import get_time_difference
-from print_history import Logger, PrintHistory, PrintHistoryLoggingHandler, ConsoleHandler
-from html_helper import generate_html, generate_html_list, generate_html_table, generate_html_button
+from print_history import (
+    Logger,
+    PrintHistory,
+    PrintHistoryLoggingHandler,
+    ConsoleHandler,
+)
+from html_helper import (
+    generate_html,
+    generate_html_list,
+    generate_html_table,
+    generate_html_button,
+)
+from i2c_scan import i2c_scan
+from http_helper import generate_http_response
 
 
-BMP280_FREQUENCY_I2C = const(100000)                # Hertz (default 100kHz higher, fast mode 400kHz)
-BMP280_FREQUENCY = const(157)                       # Hertz (WARNING: every 6.4ms!)
-BMP280_TOLERANCE_AIR_PRESSURE = const(1 * 100)      # Pascal (Pascal * 100 to convert from Hectopascal)
+BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
+BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
+BMP280_TOLERANCE_AIR_PRESSURE = const(
+    1 * 100
+)  # Pascal (Pascal * 100 to convert from Hectopascal)
 BMP280_RANGE_AIR_PRESSURE = (300 * 100, 1100 * 100)
-BMP280_TOLERANCE_TEMPERATURE = const(0.5)           # Degrees Celsius
+BMP280_TOLERANCE_TEMPERATURE = const(0.5)  # Degrees Celsius
 BMP280_RANGE_TEMPERATURE = (-40, 85)
 
-DHT22_FREQUENCY = const(0.5)                   # Hertz
-DHT22_TOLERANCE_TEMPERATURE = const(0.5)       # Degrees Celsius
+DHT22_FREQUENCY = const(0.5)  # Hertz
+DHT22_TOLERANCE_TEMPERATURE = const(0.5)  # Degrees Celsius
 DHT22_RANGE_TEMPERATURE = (-40, 80)
-DHT22_TOLERANCE_RELATIVE_HUMIDITY = const(2.0) # Percent
+DHT22_TOLERANCE_RELATIVE_HUMIDITY = const(2.0)  # Percent
 DHT22_RANGE_RELATIVE_HUMIDITY = (0, 100)
 
 SENSOR_ID_BMP280 = const("bmp280")
@@ -40,7 +58,8 @@ MEASUREMENT_ID_BMP280_AIR_PRESSURE = f"{SENSOR_ID_BMP280}_air_pressure_pa"
 MEASUREMENT_ID_DHT22_TEMPERATURE = f"{SENSOR_ID_DHT22}_temperature_celsius"
 MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = f"{SENSOR_ID_DHT22}_relative_humidity_percent"
 
-HTML_CSS_DEFAULT = const("""
+HTML_CSS_DEFAULT = const(
+    """
     table {
         width: 50%;
         margin: 20px;
@@ -57,23 +76,13 @@ HTML_CSS_DEFAULT = const("""
     h2 {
         color: #333;
     }
-""")
+"""
+)
 
-# The amount of values until a sensor is stabalized
+# The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
 # The amount of values to keep in the buffers
-BUFFER_COUNT = const(20) 
-
-# DHT22
-dht22_sensor = DHT22(Pin(GPIO_PIN_INPUT_DHT22))
-
-# BMP280
-bmp280_sensor_i2c = I2C(0, sda=Pin(GPIO_PIN_I2C_BMP280_SDA), scl=Pin(GPIO_PIN_I2C_BMP280_SCL), freq=BMP280_FREQUENCY_I2C)
-bmp280_sensor = BMP280(bmp280_sensor_i2c)
-bmp280_sensor.use_case(BMP280_CASE_WEATHER)
-
-# Onboard-LED
-led_onboard = Pin("LED", Pin.OUT)
+BUFFER_COUNT = const(20)
 
 # Sensor stabilization
 sensor_stabilized = {  # Stabalized
@@ -123,18 +132,33 @@ counter_readings = {  # good readings, bad readings
     SENSOR_ID_BMP280: {"good": 0},
 }
 
-# Track uptime
-time_init = time.time()
-
 # Track recent logs
 print_history_instance = PrintHistory()
-#console_handler = ConsoleHandler()
+# console_handler = ConsoleHandler()
 history_handler = PrintHistoryLoggingHandler(print_history_instance)
 
 # Configure the logger
 logger = Logger(name="outdoor_weather", level="DEBUG")
 logger.addHandler(history_handler)
-#logger.addHandler(console_handler)
+
+# SENSORS SHOULD BE INITALIZED OUTSIDE OF THE MAIN METHOD!
+
+# Onboard-LED
+led_onboard = Pin("LED", Pin.OUT)
+
+# DHT22
+dht22_sensor = DHT22(Pin(GPIO_PIN_INPUT_DHT22))
+
+# BMP280
+bmp280_sensor_i2c = I2C(
+    0,
+    sda=Pin(GPIO_PIN_I2C_BMP280_SDA),
+    scl=Pin(GPIO_PIN_I2C_BMP280_SCL),
+    freq=BMP280_FREQUENCY_I2C,
+)
+i2c_scan(bmp280_sensor_i2c, logger.debug)
+bmp280_sensor = BMP280(bmp280_sensor_i2c)
+bmp280_sensor.use_case(BMP280_CASE_WEATHER)
 
 
 def connect_to_wifi():
@@ -166,29 +190,29 @@ def sync_time():
         )
     except Exception as e:
         logger.error("Failed to sync time:", e)
-       
+
 
 def read_sensor(timer, sensor_id):
     global sensor_stabilized
     global sensor_stabilized_last_values
     global buffer_readings
     global counter_readings
-    
+
     try:
         sensor_measurements = []
         timestamp = get_iso_timestamp()
-        
+
         logger.debug(f"read_sensor {sensor_id}")
 
-        if sensor_id == SENSOR_ID_BMP280:
+        if sensor_id == SENSOR_ID_BMP280 and bmp280_sensor is not None:
             temp = bmp280_sensor.temperature
             pressure = bmp280_sensor.pressure
-            
+
             sensor_measurements = [
                 (temp, MEASUREMENT_ID_BMP280_TEMPERATURE),
                 (pressure, MEASUREMENT_ID_BMP280_AIR_PRESSURE),
             ]
-        elif sensor_id == SENSOR_ID_DHT22:
+        elif sensor_id == SENSOR_ID_DHT22 and dht22_sensor is not None:
             dht22_sensor.measure()
             temp = dht22_sensor.temperature()
             humidity = dht22_sensor.humidity()
@@ -198,16 +222,18 @@ def read_sensor(timer, sensor_id):
                 (humidity, MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY),
             ]
         else:
-            raise RuntimeError("Unknown {sensor_id=}")
+            raise RuntimeError(
+                "Unknown {sensor_id=} or sensor not found {dht22=}/{bmp280=}"
+            )
 
         counter_readings[sensor_id]["good"] += 1
 
         if not sensor_stabilized[sensor_id]:
             changes_detected = False
             for value, measurement_id in sensor_measurements:
-                sensor_stabilized_last_value, count = (
-                    sensor_stabilized_last_values[measurement_id]
-                )
+                sensor_stabilized_last_value, count = sensor_stabilized_last_values[
+                    measurement_id
+                ]
                 sensor_tolerance = sensor_tolerances[measurement_id]
                 if sensor_stabilized_last_value is None:
                     sensor_stabilized_last_values[measurement_id] = value, count
@@ -216,7 +242,10 @@ def read_sensor(timer, sensor_id):
                         f"[{measurement_id}] sensor not stabalized: missing last_value"
                     )
                 elif abs(value - sensor_stabilized_last_value) > sensor_tolerance:
-                    sensor_stabilized_last_values[measurement_id] = value, SENSOR_STABILIZE_COUNT
+                    sensor_stabilized_last_values[measurement_id] = (
+                        value,
+                        SENSOR_STABILIZE_COUNT,
+                    )
                     changes_detected = True
                     logger.debug(
                         f"[{measurement_id}] sensor not stabalized: detected change outside of tolerances"
@@ -382,52 +411,65 @@ def render_html_info():
     )
 
 
-def web_server(ip):
-    addr = socket.getaddrinfo(ip, 80)[0][-1]
-    s = socket.socket()
-    s.bind(addr)
-    s.listen(1)
-    logger.info("Listening on", addr)
+def handle_web_request(socket):
+    cl, addr = socket.accept()
+    logger.debug(
+        "Client connected from",
+        addr,
+        convert_to_human_readable_str("Free RAM space", *ramf(), unit_name="KB"),
+    )
+    try:
+        request = cl.recv(1024).decode("utf-8")
+        logger.debug(request)
+        if not request:
+            # Client has closed the connection
+            return
+        if "GET /measurements" in request:
+            response = generate_http_response(render_html_data())
+        elif "GET /info" in request:
+            response = generate_http_response(render_html_info())
+        elif "GET /logs" in request:
+            response = generate_http_response(render_html_logs())
+        elif "GET /json_measurements" in request:
+            # Create JSON response with separate temperature and humidity lists
+            json_str = ujson.dumps(
+                {
+                    sensor: [
+                        {"value": value, "timestamp": timestamp}
+                        for value, timestamp in readings
+                    ]
+                    for sensor, readings in buffer_readings.items()
+                }
+            )
+            response = generate_http_response(json_str, content_type="application/json")
+        else:
+            response = generate_http_response(
+                "Page not found", content_type="text/plain", status=(404, "Not Found")
+            )
+        cl.sendall(response)
+    except Exception as e:
+        logger.error("Error handling request:", e)
+    finally:
+        cl.close()
 
-    while True:
-        cl, addr = s.accept()
-        logger.debug("Client connected from", addr)
-        try:
-            request = cl.recv(1024).decode("utf-8")
-            logger.debug(request)
-            print("GET /measurements", "GET /measurements" in request)
-            print("GET /info", "GET /info" in request)
-            print("GET /logs", "GET /logs" in request)
-            print("GET /json_measurements", "GET /json_measurements" in request)
-            if "GET /measurements" in request:
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-                response += render_html_data()
-            elif "GET /info" in request:
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-                response += render_html_info()
-            elif "GET /logs" in request:
-                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-                response += render_html_logs()
-            elif "GET /json_measurements" in request:
-                # Create JSON response with separate temperature and humidity lists
-                json_str = ujson.dumps(
-                    {
-                        sensor: [
-                            {"value": value, "timestamp": timestamp}
-                            for value, timestamp in readings
-                        ]
-                        for sensor, readings in buffer_readings.items()
-                    }
-                )
-                response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n"
-                response += json_str
-            else:
-                response = "HTTP/1.1 404 Not Found\r\n\r\nPage not found"
-            cl.sendall(response)
-        except Exception as e:
-            logger.error("Error handling request:", e)
-        finally:
-            cl.close()
+
+def web_server(ip, port=80):
+    s = socket.socket()
+    try:
+        addr = socket.getaddrinfo(ip, port)[0][-1]
+        s.bind(addr)
+        logger.info(f"Successfully bound to {ip}:{port}")
+        s.listen(1)
+        logger.info("Listening on", addr)
+
+        while True:
+            handle_web_request(s)
+
+    except OSError as e:
+        logger.error("Error connecting to socket:", e)
+        raise RuntimeError(e)
+    finally:
+        s.close()
 
 
 def main():
@@ -444,18 +486,13 @@ def main():
 
     # Start the periodic sensor reading
     dht22_timer = Timer(-1)
-    dht22_timer.init(
-        freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22
-    )
-    # WARNING: Default frequency of BMP280 is too fast (use 1s instead)
+    dht22_timer.init(freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22)
+    # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
     bmp280_timer = Timer(-1)
-    bmp280_timer.init(
-        period=1000, mode=Timer.PERIODIC, callback=read_bmp280
-    )
+    bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
 
     # Start the web server
     web_server(ip)
 
 
 main()
-

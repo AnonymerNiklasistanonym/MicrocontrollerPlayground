@@ -142,7 +142,7 @@ class PrintHistoryLoggingHandler(Handler):
     """
 
     def __init__(self, print_history_instance):
-        super().__init__()
+        super().__init__(Formatter("{level}: [{name}] {message}"))
         self.print_history_instance = print_history_instance
 
     def emit(self, record):
