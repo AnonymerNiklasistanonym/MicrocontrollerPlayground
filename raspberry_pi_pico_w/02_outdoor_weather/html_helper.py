@@ -33,3 +33,7 @@ def generate_html_table(columns, rows):
         html += "</tr>"
     html += "</table>"
     return html
+
+
+def generate_html_button(title, url):
+    return f"<button onclick=\"window.location.href='{url}';\">{title}</button>"

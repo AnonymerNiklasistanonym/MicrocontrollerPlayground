@@ -14,8 +14,8 @@ from pins_config import GPIO_PIN_INPUT_DHT22, GPIO_PIN_I2C_BMP280_SDA, GPIO_PIN_
 from free_storage import df, ramf, convert_to_human_readable_str
 from timestamp import get_iso_timestamp
 from time_difference import get_time_difference
-from print_history import PrintHistory
-from html_helper import generate_html, generate_html_list, generate_html_table
+from print_history import Logger, PrintHistory, PrintHistoryLoggingHandler, ConsoleHandler
+from html_helper import generate_html, generate_html_list, generate_html_table, generate_html_button
 
 
 BMP280_FREQUENCY_I2C = const(100000)                # Hertz (default 100kHz higher, fast mode 400kHz)
@@ -40,6 +40,30 @@ MEASUREMENT_ID_BMP280_AIR_PRESSURE = f"{SENSOR_ID_BMP280}_air_pressure_pa"
 MEASUREMENT_ID_DHT22_TEMPERATURE = f"{SENSOR_ID_DHT22}_temperature_celsius"
 MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = f"{SENSOR_ID_DHT22}_relative_humidity_percent"
 
+HTML_CSS_DEFAULT = const("""
+    table {
+        width: 50%;
+        margin: 20px;
+        border-collapse: collapse;
+    }
+    th, td {
+        padding: 8px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
+    }
+    th {
+        background-color: #f2f2f2;
+    }
+    h2 {
+        color: #333;
+    }
+""")
+
+# The amount of values until a sensor is stabalized
+SENSOR_STABILIZE_COUNT = const(100)
+# The amount of values to keep in the buffers
+BUFFER_COUNT = const(20) 
+
 # DHT22
 dht22_sensor = DHT22(Pin(GPIO_PIN_INPUT_DHT22))
 
@@ -56,7 +80,6 @@ sensor_stabilized = {  # Stabalized
     SENSOR_ID_BMP280: False,
     SENSOR_ID_DHT22: False,
 }
-SENSOR_STABILIZE_COUNT = const(100)
 sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabalized
     MEASUREMENT_ID_DHT22_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
     MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: (None, SENSOR_STABILIZE_COUNT),
@@ -85,7 +108,6 @@ sensor_ranges = {  # min, max
 }
 
 # Store measurements as separate lists for temperature and humidity
-BUFFER_COUNT = const(20) # The amount of values to keep in the buffers
 buffer_readings = {  # (value: number, iso timestamp: str)
     MEASUREMENT_ID_DHT22_TEMPERATURE: [],
     MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: [],
@@ -106,36 +128,32 @@ time_init = time.time()
 
 # Track recent logs
 print_history_instance = PrintHistory()
+#console_handler = ConsoleHandler()
+history_handler = PrintHistoryLoggingHandler(print_history_instance)
 
-
-def print_history(*args):
-    """
-    Custom print function that logs the message to the print history instance
-    """
-    # Convert all arguments to strings and join them with spaces
-    message = " ".join(str(arg) for arg in args)
-    print_history_instance.add(message)
-    # Print the message to the console
-    print(*args)
+# Configure the logger
+logger = Logger(name="outdoor_weather", level="DEBUG")
+logger.addHandler(history_handler)
+#logger.addHandler(console_handler)
 
 
 def connect_to_wifi():
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.connect(SSID, PASSWORD)
-    print_history("Connecting to WiFi...")
+    logger.info("Connecting to WiFi...")
     while not wlan.isconnected():
         led_onboard.on()
         time.sleep(0.5)
         led_onboard.off()
         time.sleep(0.5)
-    print_history("Connected to WiFi:", wlan.ifconfig())
+    logger.info("Connected to WiFi:", wlan.ifconfig())
     # TODO Doesn't work
     # try:
     #    wlan.config("raspberrypicow2024")
-    #    print_history(f"hostname set to '{hostname}.local'")
+    #    logger.info(f"hostname set to '{hostname}.local'")
     # except Exception as e:
-    #    print_history(f"Failed to set hostname: {e}")
+    #    logger.error(f"Failed to set hostname: {e}")
     return wlan.ifconfig()[0]
 
 
@@ -143,11 +161,11 @@ def sync_time():
     try:
         previous_time = time.localtime()
         ntptime.settime()  # Sync time from NTP server
-        print_history(
+        logger.info(
             "Time synchronized with NTP server.", previous_time, time.localtime()
         )
     except Exception as e:
-        print_history("Failed to sync time:", e)
+        logger.error("Failed to sync time:", e)
        
 
 def read_sensor(timer, sensor_id):
@@ -160,7 +178,7 @@ def read_sensor(timer, sensor_id):
         sensor_measurements = []
         timestamp = get_iso_timestamp()
         
-        print(f"read_sensor {sensor_id}")
+        logger.debug(f"read_sensor {sensor_id}")
 
         if sensor_id == SENSOR_ID_BMP280:
             temp = bmp280_sensor.temperature
@@ -194,27 +212,27 @@ def read_sensor(timer, sensor_id):
                 if sensor_stabilized_last_value is None:
                     sensor_stabilized_last_values[measurement_id] = value, count
                     changes_detected = True
-                    print_history(
+                    logger.debug(
                         f"[{measurement_id}] sensor not stabalized: missing last_value"
                     )
                 elif abs(value - sensor_stabilized_last_value) > sensor_tolerance:
                     sensor_stabilized_last_values[measurement_id] = value, SENSOR_STABILIZE_COUNT
                     changes_detected = True
-                    print_history(
+                    logger.debug(
                         f"[{measurement_id}] sensor not stabalized: detected change outside of tolerances"
                     )
                 elif count != 0:
                     changes_detected = True
-                    print_history(
+                    logger.debug(
                         f"[{measurement_id}] sensor not stabalized: detected no change but wait {count} more times"
                     )
                     sensor_stabilized_last_values[measurement_id] = value, count - 1
                 else:
-                    print_history(
+                    logger.info(
                         f"[{measurement_id}] sensor partly stabalized: detected no change"
                     )
             if not changes_detected:
-                print_history(f"[{sensor_id}] sensor stabalized: no changes detected")
+                logger.info(f"[{sensor_id}] sensor stabalized: no changes detected")
                 sensor_stabilized[sensor_id] = True
 
         for value, measurement_id in sensor_measurements:
@@ -231,7 +249,7 @@ def read_sensor(timer, sensor_id):
             within_range = value >= min_value and value <= max_value
 
             if change_detected and within_range and sensor_stabilized[sensor_id]:
-                print_history(
+                logger.debug(
                     f"[{measurement_id}] Recorded: {value}{unit} at {timestamp}"
                 )
                 buffer.append([value, timestamp])
@@ -247,7 +265,7 @@ def read_sensor(timer, sensor_id):
                 elif not sensor_stabilized[sensor_id]:
                     reason = f"sensor stabilization ongoing"
 
-                print_history(
+                logger.debug(
                     f"[{measurement_id}] Skipped: current {value}{unit} ({reason})"
                 )
 
@@ -255,7 +273,7 @@ def read_sensor(timer, sensor_id):
                 counter_readings[measurement_id]["good"] += 1
 
     except Exception as e:
-        print_history(f"[{sensor_id}] Error reading sensor:", e)
+        logger.error(f"[{sensor_id}] Error reading sensor:", e)
         if e in counter_readings[sensor_id]:
             counter_readings[sensor_id][e] += 1
         else:
@@ -270,12 +288,15 @@ def read_bmp280(timer):
     read_sensor(timer, SENSOR_ID_BMP280)
 
 
-def render_html():
+def render_html_data():
     """
     Renders the HTML page displaying the temperature and humidity records in tables.
     """
-    html = "<h1>Sensor Data</h1>"
-    html += '<button onclick="window.location.href=\'/json_measurements\';">View JSON Measurements</button>'
+    html = "<h1>Measurements</h1>"
+
+    html += generate_html_button("View Measurements as JSON", "/json_measurements")
+    html += generate_html_button("View Info", "/info")
+    html += generate_html_button("View Logs", "/logs")
 
     for name, measurement_id in [
         ("DHT22 Temperature", MEASUREMENT_ID_DHT22_TEMPERATURE),
@@ -285,18 +306,35 @@ def render_html():
     ]:
         html += f"<h2>{name} Records</h2>"
 
-
         unit = sensor_unit[measurement_id]
         buffer = buffer_readings[measurement_id]
 
         html += generate_html_table([unit, "Timestamp"], buffer)
 
-    html += "<h1>Device Stats</h1><h2>Recent Logs</h2>"
+    return generate_html(
+        "Measurements",
+        html,
+        css=HTML_CSS_DEFAULT,
+    )
+
+
+def render_html_logs():
+    html = "<h1>Logs</h1>"
+    html += "<h2>Recent Logs:</h2>"
 
     html += generate_html_table(
         ["Message", "Timestamp"], print_history_instance.get_history()
     )
 
+    return generate_html(
+        "Logs",
+        html,
+        css=HTML_CSS_DEFAULT,
+    )
+
+
+def render_html_info():
+    html = "<h1>Info</h1>"
     html += "<h2>Free Storage:</h2>"
 
     file_space_f, file_space_t = df()
@@ -338,26 +376,9 @@ def render_html():
     )
 
     return generate_html(
-        "Outdoor Weather",
+        "Info",
         html,
-        css="""
-        table {
-            width: 50%;
-            margin: 20px;
-            border-collapse: collapse;
-        }
-        th, td {
-            padding: 8px;
-            text-align: left;
-            border-bottom: 1px solid #ddd;
-        }
-        th {
-            background-color: #f2f2f2;
-        }
-        h2 {
-            color: #333;
-        }
-    """,
+        css=HTML_CSS_DEFAULT,
     )
 
 
@@ -366,18 +387,27 @@ def web_server(ip):
     s = socket.socket()
     s.bind(addr)
     s.listen(1)
-    print_history("Listening on", addr)
+    logger.info("Listening on", addr)
 
     while True:
         cl, addr = s.accept()
-        print_history("Client connected from", addr)
+        logger.debug("Client connected from", addr)
         try:
             request = cl.recv(1024).decode("utf-8")
-            print_history(request)
+            logger.debug(request)
+            print("GET /measurements", "GET /measurements" in request)
+            print("GET /info", "GET /info" in request)
+            print("GET /logs", "GET /logs" in request)
+            print("GET /json_measurements", "GET /json_measurements" in request)
             if "GET /measurements" in request:
-                # Return the HTML page rendering the tables
                 response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
-                response += render_html()
+                response += render_html_data()
+            elif "GET /info" in request:
+                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+                response += render_html_info()
+            elif "GET /logs" in request:
+                response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n\r\n"
+                response += render_html_logs()
             elif "GET /json_measurements" in request:
                 # Create JSON response with separate temperature and humidity lists
                 json_str = ujson.dumps(
@@ -395,7 +425,7 @@ def web_server(ip):
                 response = "HTTP/1.1 404 Not Found\r\n\r\nPage not found"
             cl.sendall(response)
         except Exception as e:
-            print_history("Error handling request:", e)
+            logger.error("Error handling request:", e)
         finally:
             cl.close()
 
@@ -428,3 +458,4 @@ def main():
 
 
 main()
+

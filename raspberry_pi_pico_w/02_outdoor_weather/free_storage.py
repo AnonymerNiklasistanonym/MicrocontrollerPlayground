@@ -7,7 +7,7 @@ import sys
 
 def df():
     """Free file space"""
-    # File system statistics for the directory '//' (the root directory
+    # File system statistics for the directory '//' (the root directory)
     s = os.statvfs("//")
     T = s[0]  # The total number of blocks
     F = s[3]  # The number of free blocks
