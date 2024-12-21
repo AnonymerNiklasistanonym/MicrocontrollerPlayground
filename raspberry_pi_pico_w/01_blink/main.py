@@ -1,12 +1,16 @@
 from machine import Pin, Timer
 
-
+# Onboard LED (Warning this LED can in rare cases die/be dead!)
 led_onboard = Pin("LED", Pin.OUT)
+
+# External LED (connected on one side to GPIO PIN 0 with a 220 Ohm resistor in between and to any GND PIN on the other)
+led_external = Pin(16, Pin.OUT)
 
 
 def blink(timer):
     print("toggle LED")
     led_onboard.toggle()
+    led_external.toggle()
 
 
 def main():
