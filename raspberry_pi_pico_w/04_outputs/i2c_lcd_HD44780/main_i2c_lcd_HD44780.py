@@ -17,8 +17,8 @@ def i2c_scan(i2c):
 
 
 HD44780_LCD_I2C_ADDR     = const(0x27)
-HD44780_LCD_I2C_NUM_ROWS = const(4)
-HD44780_LCD_I2C_NUM_COLS = const(20)
+HD44780_LCD_I2C_NUM_ROWS = const(2)  # or const(4) if 2004A instead of 1602
+HD44780_LCD_I2C_NUM_COLS = const(16) # or const(20)
 HD44780_LCD_I2C_FREQ = const(400000)
 
 # HD44780 (LCD) [2004A]
@@ -27,7 +27,9 @@ i2c_scan(i2c)
 lcd = I2cLcd(i2c, HD44780_LCD_I2C_ADDR, HD44780_LCD_I2C_NUM_ROWS, HD44780_LCD_I2C_NUM_COLS)
 
 
-def scroll_text_horizontal(lcd, text_rows, delay=0.025):
+
+
+def scroll_text_horizontal(lcd, text_rows, delay=0.001):
     """Scroll text horizontally"""
     max_length = max([len(text_row) for text_row in text_rows])
     updated_text_rows = []
@@ -40,7 +42,7 @@ def scroll_text_horizontal(lcd, text_rows, delay=0.025):
         utime.sleep(delay)
 
 
-def scroll_text_zigzag(lcd, text, delay=0.025):
+def scroll_text_zigzag(lcd, text, delay=0.001):
     """Scrolls text across the rows in a zigzag pattern"""
     text = " " * (lcd.num_lines * lcd.num_columns) + text + " " * (lcd.num_lines * lcd.num_columns)
     for i in range(len(text) - (lcd.num_lines * lcd.num_columns) + 1):
@@ -54,28 +56,36 @@ def main():
     lcd.putstr("Hello world!")
     utime.sleep(2)
 
-    # Change backlight
+    # Change backlight (characters still visible)
+    lcd.clear()
+    lcd.putstr("Backlight OFF")
     lcd.backlight_off()
     utime.sleep(2)
+    lcd.clear()
+    lcd.putstr("Backlight ON")
     lcd.backlight_on()
     utime.sleep(2)
 
-    # Change display
+    # Change display (characters invisible but backlight still on)
+    lcd.clear()
+    lcd.putstr("Display OFF")
     lcd.display_off()
     utime.sleep(2)
+    lcd.clear()
+    lcd.putstr("Display ON")
     lcd.display_on()
     utime.sleep(2)
 
     # Clear content
     lcd.clear()
     utime.sleep(2)
-
+    
     # Display all possible characters [0,255]
     char_code = 0
     while char_code <= 255:
         lcd.clear()
-        for row in range(HD44780_LCD_I2C_NUM_ROWS):
-            for col in range(HD44780_LCD_I2C_NUM_COLS):
+        for row in range(lcd.num_lines):
+            for col in range(lcd.num_columns):
                 if char_code <= 255:
                     lcd.move_to(col, row)
                     lcd.putchar(chr(char_code))
@@ -102,27 +112,7 @@ def main():
     utime.sleep(2)
     lcd.blink_cursor_off()
     lcd.hide_cursor()
-
-    # Scroll text horizontally (single row(s))
-    lcd.clear()
-    for _ in range(2):
-        scroll_text_horizontal(lcd, ["Hello world!"])
-    utime.sleep(2)
-    # ONLY WORKS WHEN 4 ROWS OR MORE EXIST!
-    scroll_text_horizontal(lcd, [
-        "".join([chr(char_code) for char_code in range(0, 255 + 1)]),
-        "".join([str(x % 1000 // 100) for x in range(0, 255 + 1)]),
-        "".join([str(x % 100 // 10) for x in range(0, 255 + 1)]),
-        "".join([str(x % 10) for x in range(0, 255 + 1)]),
-    ])
-    utime.sleep(2)
-
-    # Scroll text zigzag horizontal (across all rows)
-    lcd.clear()
-    for _ in range(2):
-        scroll_text_zigzag(lcd, "".join([chr(char_code) for char_code in range(0, 255 + 1)]), 0)
-    utime.sleep(2)
-
+     
     # Display custom chars (8 rows x 5 columns of pixels: 0b + 0=off/1=on)
     heart = [
         0b00000,  # Row 1: Empty row
@@ -138,7 +128,33 @@ def main():
     lcd.custom_char(0, heart)  # Store the heart to CGRAM location 0
     lcd.clear()
     lcd.putstr("Heart: " + chr(0) * (lcd.num_columns - 7))
+    
+    # Scroll text horizontally (single row(s))
+    lcd.clear()
+    for _ in range(2):
+        scroll_text_horizontal(lcd, ["Hello world!"])
 
+    # ONLY WORKS WHEN 4 ROWS OR MORE EXIST!
+    if lcd.num_lines >= 4:
+        lcd.clear()
+        scroll_text_horizontal(lcd, [
+            "".join([chr(char_code) for char_code in range(0, 255 + 1)]),
+            "".join([str(x % 1000 // 100) for x in range(0, 255 + 1)]),
+            "".join([str(x % 100 // 10) for x in range(0, 255 + 1)]),
+            "".join([str(x % 10) for x in range(0, 255 + 1)]),
+        ])
+
+    # ONLY WORKS WHEN 2 ROWS OR MORE EXIST!
+    elif lcd.num_lines >= 2:
+        lcd.clear()
+        scroll_text_horizontal(lcd, [
+            "".join([chr(char_code) + " " * len(str(char_code)) for char_code in range(0, 255 + 1)]),
+            "".join([str(x) + " " for x in range(0, 255 + 1)]),
+        ])
+    
+    # Scroll text zigzag horizontal (across all rows)
+    lcd.clear()
+    scroll_text_zigzag(lcd, "".join([chr(char_code) for char_code in range(0, 255 + 1)]), 0)
 
 
 main()
