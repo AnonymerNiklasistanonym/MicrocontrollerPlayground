@@ -153,7 +153,6 @@ class Plugin(PluginBase):
 
         # Schedule periodic checks and button handling
         retry_delay_ics = 1
-        latest_trash_date: Optional[tuple[date, str]] = None
 
         while True:
             self.logger.debug("Run loop...")
@@ -208,9 +207,7 @@ class Plugin(PluginBase):
                 self.trash_type_tomorrow = None
                 self.trash_type_bring_in = None
 
-            # TODO update_leds()
-            await asyncio.sleep(5)
-            # await asyncio.sleep(3600)  # Check once every hour
+            await asyncio.sleep(60 * 60)  # Check once every hour
 
     async def request_widgets(self):
         if self.current_trash_dates is not None:

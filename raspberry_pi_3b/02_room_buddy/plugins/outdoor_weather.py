@@ -16,7 +16,7 @@ TemperatureCelsius = NewType('TemperatureCelsius', float)
 RelativeHumidityPercent = NewType('RelativeHumidityPercent', float)
 AirPressurePascal = NewType('AirPressurePascal', float)
 
-REQUEST_INTERVAL_SECONDS = 5  # Fetch data every 5 seconds
+REQUEST_INTERVAL_SECONDS = 30  # Fetch data every 30 seconds
 
 # database
 DB_OUTDOOR_WEATHER = Path(os.path.dirname(os.path.realpath(sys.argv[0]))).joinpath("data", "outdoor_weather.db")
@@ -42,6 +42,7 @@ class Plugin(PluginBase):
         self.last_pressure_bmp280: Optional[AirPressurePascal] = None
         self.qr_code_data_visualizer_url: Optional[str] = None
         self.qr_code_outdoor_weather_url: Optional[str] = None
+        self.etag: Optional[str] = None
 
     def temp_changed_dht22(self, old_temp: TemperatureCelsius | None, new_temp: TemperatureCelsius):
         return old_temp is None or abs(new_temp - old_temp) > self.tolerance_temp_dht22
@@ -57,10 +58,18 @@ class Plugin(PluginBase):
 
     async def fetch_data(self):
         """Fetch the latest JSON data from the endpoint."""
+        headers = {}
+        if self.etag:  # Add the ETag to the headers if it exists
+            headers['If-None-Match'] = self.etag
+
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(self.outdoor_weather_url) as response:
-                    if response.status == 200:
+                async with session.get(self.outdoor_weather_url, headers=headers) as response:
+                    if response.status == 304:
+                        self.logger.debug("No new data available")
+                        return None
+                    elif response.status == 200:
+                        self.etag = response.headers.get('ETag', None)
                         json_data = await response.json()
                         return json_data
                     else:
