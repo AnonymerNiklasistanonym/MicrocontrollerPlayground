@@ -128,6 +128,36 @@ async function fetchData() {
     return data;
 }
 
+function addIntermediateEntries(data, intermediateTimeDiff = 30 * 60 * 1000) {
+    let result = [];
+
+    for (let i = 0; i < data.length - 1; i++) {
+        const current = data[i];
+        const next = data[i + 1];
+
+        result.push(current); // Always include the current entry
+
+        // Calculate time difference between current and next timestamps
+        const currentTime = current.timestamp.getTime();
+        const nextTime = next.timestamp.getTime();
+
+        // If the difference exceeds x minutes, add intermediate entry
+        if (nextTime - currentTime > intermediateTimeDiff) {
+            result.push({
+                value: current.value,
+                timestamp: new Date(nextTime - intermediateTimeDiff)
+            });
+        }
+    }
+
+    // Always include the last entry
+    if (data.length > 0) {
+        result.push(data[data.length - 1]);
+    }
+
+    return result;
+}
+
 function filterData(data, startDate, endDate) {
 
     const filteredData = {};
@@ -157,7 +187,7 @@ function filterData(data, startDate, endDate) {
                     filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(300 * 100, 1100 * 100, sensor));
                 }
             }
-            filteredData[category][sensor]["filtered"] = filteredData[category][sensor]["clipped"].filter(rollingThresholdFilter(5, 1, sensor));
+            filteredData[category][sensor]["filtered"] = addIntermediateEntries(filteredData[category][sensor]["clipped"]).filter(rollingThresholdFilter(5, 1, sensor));
         }
     }
 
