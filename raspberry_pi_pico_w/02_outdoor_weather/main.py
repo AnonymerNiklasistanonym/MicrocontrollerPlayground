@@ -85,11 +85,11 @@ SENSOR_STABILIZE_COUNT = const(100)
 BUFFER_COUNT = const(20)
 
 # Sensor stabilization
-sensor_stabilized = {  # Stabalized
+sensor_stabilized = {  # Stabilized
     SENSOR_ID_BMP280: False,
     SENSOR_ID_DHT22: False,
 }
-sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabalized
+sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabilized
     MEASUREMENT_ID_DHT22_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
     MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: (None, SENSOR_STABILIZE_COUNT),
     MEASUREMENT_ID_BMP280_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
@@ -141,6 +141,9 @@ history_handler = PrintHistoryLoggingHandler(print_history_instance)
 logger = Logger(name="outdoor_weather", level="DEBUG")
 logger.addHandler(history_handler)
 
+# Track uptime
+time_init = time.time()
+
 # SENSORS SHOULD BE INITALIZED OUTSIDE OF THE MAIN METHOD!
 
 # Onboard-LED
@@ -158,7 +161,6 @@ bmp280_sensor_i2c = I2C(
 )
 i2c_scan(bmp280_sensor_i2c, logger.debug)
 bmp280_sensor = BMP280(bmp280_sensor_i2c)
-bmp280_sensor.use_case(BMP280_CASE_WEATHER)
 
 
 def connect_to_wifi():
@@ -182,12 +184,15 @@ def connect_to_wifi():
 
 
 def sync_time():
+    global time_init
+
     try:
         previous_time = time.localtime()
         ntptime.settime()  # Sync time from NTP server
         logger.info(
             "Time synchronized with NTP server.", previous_time, time.localtime()
         )
+        time_init = time.time()
     except Exception as e:
         logger.error("Failed to sync time:", e)
 
@@ -201,8 +206,6 @@ def read_sensor(timer, sensor_id):
     try:
         sensor_measurements = []
         timestamp = get_iso_timestamp()
-
-        logger.debug(f"read_sensor {sensor_id}")
 
         if sensor_id == SENSOR_ID_BMP280 and bmp280_sensor is not None:
             temp = bmp280_sensor.temperature
@@ -239,7 +242,7 @@ def read_sensor(timer, sensor_id):
                     sensor_stabilized_last_values[measurement_id] = value, count
                     changes_detected = True
                     logger.debug(
-                        f"[{measurement_id}] sensor not stabalized: missing last_value"
+                        f"[{measurement_id}] sensor not stabilized: missing last_value"
                     )
                 elif abs(value - sensor_stabilized_last_value) > sensor_tolerance:
                     sensor_stabilized_last_values[measurement_id] = (
@@ -248,20 +251,20 @@ def read_sensor(timer, sensor_id):
                     )
                     changes_detected = True
                     logger.debug(
-                        f"[{measurement_id}] sensor not stabalized: detected change outside of tolerances"
+                        f"[{measurement_id}] sensor not stabilized: detected change outside of tolerances"
                     )
                 elif count != 0:
                     changes_detected = True
                     logger.debug(
-                        f"[{measurement_id}] sensor not stabalized: detected no change but wait {count} more times"
+                        f"[{measurement_id}] sensor not stabilized: detected no change but wait {count} more times"
                     )
                     sensor_stabilized_last_values[measurement_id] = value, count - 1
                 else:
                     logger.info(
-                        f"[{measurement_id}] sensor partly stabalized: detected no change"
+                        f"[{measurement_id}] sensor partly stabilized: detected no change"
                     )
             if not changes_detected:
-                logger.info(f"[{sensor_id}] sensor stabalized: no changes detected")
+                logger.info(f"[{sensor_id}] sensor stabilized: no changes detected")
                 sensor_stabilized[sensor_id] = True
 
         for value, measurement_id in sensor_measurements:
@@ -315,6 +318,21 @@ def read_dht22(timer):
 
 def read_bmp280(timer):
     read_sensor(timer, SENSOR_ID_BMP280)
+
+
+def restart_bmp280(timer):
+    global bmp280_sensor_i2c
+    global bmp280_sensor
+
+    logger.debug("Restart BMP280")
+    bmp280_sensor_i2c = I2C(
+        0,
+        sda=Pin(GPIO_PIN_I2C_BMP280_SDA),
+        scl=Pin(GPIO_PIN_I2C_BMP280_SCL),
+        freq=BMP280_FREQUENCY_I2C,
+    )
+    i2c_scan(bmp280_sensor_i2c, logger.debug)
+    bmp280_sensor = BMP280(bmp280_sensor_i2c)
 
 
 def render_html_data():
@@ -430,6 +448,16 @@ def handle_web_request(socket):
             response = generate_http_response(render_html_info())
         elif "GET /logs" in request:
             response = generate_http_response(render_html_logs())
+        elif "GET /restart_bmp280" in request:
+            restart_bmp280(None)
+            response = generate_http_response(
+                "Restarted BMP280 sensor", content_type="text/plain"
+            )
+        elif "GET /sync_time" in request:
+            sync_time()
+            response = generate_http_response(
+                f"Time sync completed: {get_iso_timestamp()}", content_type="text/plain"
+            )
         elif "GET /json_measurements" in request:
             # Create JSON response with separate temperature and humidity lists
             json_str = ujson.dumps(
@@ -490,9 +518,15 @@ def main():
     # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
     bmp280_timer = Timer(-1)
     bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
+    # Since the BMP280 timer is crashing all the time restart it periodically
+    bmp280_restart_timer = Timer(-1)
+    bmp280_restart_timer.init(period=60 * 60 * 1000, mode=Timer.PERIODIC, callback=restart_bmp280)
 
     # Start the web server
     web_server(ip)
 
 
-main()
+try:
+    main()
+except KeyboardInterrupt:
+    print("Program stopped.")
