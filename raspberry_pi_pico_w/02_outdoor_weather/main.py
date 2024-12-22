@@ -4,7 +4,7 @@ import time
 import os
 import ntptime
 import ujson
-from machine import I2C, Pin, Timer
+from machine import I2C, Pin, Timer, reset
 from dht import DHT22
 
 from bmp280 import *
@@ -31,8 +31,17 @@ from html_helper import (
     generate_html_button,
 )
 from i2c_scan import i2c_scan
-from http_helper import generate_http_response
+from http_helper import (
+    generate_http_response,
+    generate_etag,
+    HTTP_CONTENT_TYPE_JSON,
+    HTTP_CONTENT_TYPE_TEXT,
+    HTTP_STATUS_NOT_MODIFIED,
+    HTTP_STATUS_NOT_FOUND,
+)
 
+
+PROGRAM_VERSION = const("v0.1")
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
@@ -89,7 +98,7 @@ sensor_stabilized = {  # Stabilized
     SENSOR_ID_BMP280: False,
     SENSOR_ID_DHT22: False,
 }
-sensor_stabilized_last_values = {  # Last value, # of no changes until sensor stabilized
+sensor_last_values = {  # Last value, # of no changes
     MEASUREMENT_ID_DHT22_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
     MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: (None, SENSOR_STABILIZE_COUNT),
     MEASUREMENT_ID_BMP280_TEMPERATURE: (None, SENSOR_STABILIZE_COUNT),
@@ -144,6 +153,10 @@ logger.addHandler(history_handler)
 # Track uptime
 time_init = time.time()
 
+# Optimize Etag calculation
+current_etag = None
+update_etag = True
+
 # SENSORS SHOULD BE INITALIZED OUTSIDE OF THE MAIN METHOD!
 
 # Onboard-LED
@@ -169,6 +182,7 @@ def connect_to_wifi():
     wlan.connect(SSID, PASSWORD)
     logger.info("Connecting to WiFi...")
     while not wlan.isconnected():
+        logger.debug("...")
         led_onboard.on()
         time.sleep(0.5)
         led_onboard.off()
@@ -184,24 +198,25 @@ def connect_to_wifi():
 
 
 def sync_time():
-    global time_init
-
-    try:
-        previous_time = time.localtime()
-        ntptime.settime()  # Sync time from NTP server
-        logger.info(
-            "Time synchronized with NTP server.", previous_time, time.localtime()
-        )
-        time_init = time.time()
-    except Exception as e:
-        logger.error("Failed to sync time:", e)
+    while True:
+        try:
+            previous_time = time.localtime()
+            ntptime.settime()
+            logger.info(f"Time synchronized with NTP server. Previous time: {previous_time}, New time: {time.localtime()}")
+            break 
+        except Exception as e:
+            # Log the error
+            logger.error(f"Failed to sync time: {e}")
+            # Wait for 5 seconds before retrying
+            time.sleep(5)
 
 
 def read_sensor(timer, sensor_id):
     global sensor_stabilized
-    global sensor_stabilized_last_values
+    global sensor_last_values
     global buffer_readings
     global counter_readings
+    global update_etag
 
     try:
         sensor_measurements = []
@@ -234,18 +249,16 @@ def read_sensor(timer, sensor_id):
         if not sensor_stabilized[sensor_id]:
             changes_detected = False
             for value, measurement_id in sensor_measurements:
-                sensor_stabilized_last_value, count = sensor_stabilized_last_values[
-                    measurement_id
-                ]
+                sensor_last_value, count = sensor_last_values[measurement_id]
                 sensor_tolerance = sensor_tolerances[measurement_id]
-                if sensor_stabilized_last_value is None:
-                    sensor_stabilized_last_values[measurement_id] = value, count
+                if sensor_last_value is None:
+                    sensor_last_values[measurement_id] = value, count
                     changes_detected = True
                     logger.debug(
                         f"[{measurement_id}] sensor not stabilized: missing last_value"
                     )
-                elif abs(value - sensor_stabilized_last_value) > sensor_tolerance:
-                    sensor_stabilized_last_values[measurement_id] = (
+                elif abs(value - sensor_last_value) > sensor_tolerance:
+                    sensor_last_values[measurement_id] = (
                         value,
                         SENSOR_STABILIZE_COUNT,
                     )
@@ -258,7 +271,7 @@ def read_sensor(timer, sensor_id):
                     logger.debug(
                         f"[{measurement_id}] sensor not stabilized: detected no change but wait {count} more times"
                     )
-                    sensor_stabilized_last_values[measurement_id] = value, count - 1
+                    sensor_last_values[measurement_id] = value, count - 1
                 else:
                     logger.info(
                         f"[{measurement_id}] sensor partly stabilized: detected no change"
@@ -270,6 +283,7 @@ def read_sensor(timer, sensor_id):
         for value, measurement_id in sensor_measurements:
             unit = sensor_unit[measurement_id]
             buffer = buffer_readings[measurement_id]
+            sensor_last_values[measurement_id] = value, sensor_last_values[measurement_id][1] 
             last_value = buffer[-1][0] if len(buffer) > 0 else None
             sensor_tolerance = sensor_tolerances[measurement_id]
             change_detected = (
@@ -287,6 +301,7 @@ def read_sensor(timer, sensor_id):
                 buffer.append([value, timestamp])
                 if len(buffer) > BUFFER_COUNT:
                     buffer.pop(0)
+                update_etag = True
             else:
                 reason = f"not within tolerance {sensor_tolerance}{unit}"
                 if not within_range:
@@ -351,11 +366,10 @@ def render_html_data():
         ("BMP280 Temperature", MEASUREMENT_ID_BMP280_TEMPERATURE),
         ("BMP280 Air Pressure", MEASUREMENT_ID_BMP280_AIR_PRESSURE),
     ]:
-        html += f"<h2>{name} Records</h2>"
-
         unit = sensor_unit[measurement_id]
-        buffer = buffer_readings[measurement_id]
-
+        buffer = buffer_readings[measurement_id][::-1]
+        
+        html += f"<h2>{name} Records ({sensor_last_values[measurement_id][0]}{unit})</h2>"
         html += generate_html_table([unit, "Timestamp"], buffer)
 
     return generate_html(
@@ -415,6 +429,7 @@ def render_html_info():
 
     html += generate_html_list(
         [
+            f"Version: {PROGRAM_VERSION}",
             f"OS information: {os.uname()}",
             f"Uptime: {uptime_days}d {uptime_hours:02}:{uptime_minutes:02}:{uptime_seconds:02}",
             f"Current time: {get_iso_timestamp()}",
@@ -430,6 +445,10 @@ def render_html_info():
 
 
 def handle_web_request(socket):
+    global time_init
+    global update_etag
+    global current_etag
+
     cl, addr = socket.accept()
     logger.debug(
         "Client connected from",
@@ -437,6 +456,7 @@ def handle_web_request(socket):
         convert_to_human_readable_str("Free RAM space", *ramf(), unit_name="KB"),
     )
     try:
+        start_time = time.ticks_ms()
         request = cl.recv(1024).decode("utf-8")
         logger.debug(request)
         if not request:
@@ -451,30 +471,58 @@ def handle_web_request(socket):
         elif "GET /restart_bmp280" in request:
             restart_bmp280(None)
             response = generate_http_response(
-                "Restarted BMP280 sensor", content_type="text/plain"
+                "Restarted BMP280 sensor", content_type=HTTP_CONTENT_TYPE_TEXT
             )
         elif "GET /sync_time" in request:
             sync_time()
+            time_init = time.time()
             response = generate_http_response(
-                f"Time sync completed: {get_iso_timestamp()}", content_type="text/plain"
+                f"Time sync completed: {get_iso_timestamp()}",
+                content_type=HTTP_CONTENT_TYPE_TEXT,
             )
+        elif "GET /reset" in request:
+            reset()
         elif "GET /json_measurements" in request:
-            # Create JSON response with separate temperature and humidity lists
-            json_str = ujson.dumps(
-                {
-                    sensor: [
-                        {"value": value, "timestamp": timestamp}
-                        for value, timestamp in readings
-                    ]
-                    for sensor, readings in buffer_readings.items()
-                }
-            )
-            response = generate_http_response(json_str, content_type="application/json")
+            if update_etag:
+                current_etag = generate_etag(buffer_readings)
+                update_etag = False
+            serve_data = True
+            # Catch ETag entries from the request header if request is conditional
+            if "If-None-Match" in request:
+                etag_header = (
+                    request.split("If-None-Match: ")[1].split("\r\n")[0].strip().strip('"')
+                )
+                logger.debug(f"Found {etag_header=} ({current_etag=}, {etag_header == current_etag=})")
+                # If no etag change exist send not modified
+                if etag_header == current_etag:
+                    response = generate_http_response(
+                        None, status=HTTP_STATUS_NOT_MODIFIED
+                    )
+                    serve_data = False
+            if serve_data:
+                # Create JSON response with separate temperature and humidity lists
+                json_str = ujson.dumps(
+                    {
+                        sensor: [
+                            {"value": value, "timestamp": timestamp}
+                            for value, timestamp in readings
+                        ]
+                        for sensor, readings in buffer_readings.items()
+                    }
+                )
+                response = generate_http_response(
+                    json_str, content_type=HTTP_CONTENT_TYPE_JSON, etag=current_etag
+                )
         else:
             response = generate_http_response(
-                "Page not found", content_type="text/plain", status=(404, "Not Found")
+                "Page not found",
+                content_type=HTTP_CONTENT_TYPE_TEXT,
+                status=HTTP_STATUS_NOT_FOUND,
             )
+        #print("response:", repr(response))
         cl.sendall(response)
+        end_time = time.ticks_ms()
+        logger.debug(f"Responded in {time.ticks_diff(end_time, start_time)}ms")
     except Exception as e:
         logger.error("Error handling request:", e)
     finally:
@@ -512,21 +560,35 @@ def main():
     sync_time()
     time_init = time.time()
 
-    # Start the periodic sensor reading
-    dht22_timer = Timer(-1)
-    dht22_timer.init(freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22)
-    # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
-    bmp280_timer = Timer(-1)
-    bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
-    # Since the BMP280 timer is crashing all the time restart it periodically
-    bmp280_restart_timer = Timer(-1)
-    bmp280_restart_timer.init(period=60 * 60 * 1000, mode=Timer.PERIODIC, callback=restart_bmp280)
+    try:
+        # Start the periodic sensor reading
+        read_dht22_timer = Timer(-1)
+        read_dht22_timer.init(freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22)
+        # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
+        read_bmp280_timer = Timer(-1)
+        read_bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
+        # Since the BMP280 timer is crashing all the time restart it periodically (every hour)
+        restart_bmp280_timer = Timer(-1)
+        restart_bmp280_timer.init(
+            period=60 * 60 * 1000, mode=Timer.PERIODIC, callback=restart_bmp280
+        )
 
-    # Start the web server
-    web_server(ip)
+        # Start the web server
+        web_server(ip)
+    except Exception as e:
+        print("Error occurred:", e)
+    finally:
+        # Ensure that all timers are stopped if there's an error
+        read_dht22_timer.deinit()
+        read_bmp280_timer.deinit()
+        restart_bmp280_timer.deinit()
+        print("Timers have been stopped.")
 
 
 try:
     main()
+    # Restart the machine in case the main function terminates
+    print("Restarting...")
+    reset()
 except KeyboardInterrupt:
     print("Program stopped.")
