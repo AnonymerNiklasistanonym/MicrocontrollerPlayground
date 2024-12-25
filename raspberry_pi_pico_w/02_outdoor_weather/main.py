@@ -4,17 +4,23 @@ import time
 import os
 import ntptime
 import ujson
-from machine import I2C, Pin, Timer, reset
+from machine import I2C, SPI, Pin, Timer, reset, WDT
 from dht import DHT22
 
 from bmp280 import *
+from sdcard import SDCard
 
-from wifi_config import SSID, PASSWORD
 from pins_config import (
     GPIO_PIN_INPUT_DHT22,
     GPIO_PIN_I2C_BMP280_SDA,
     GPIO_PIN_I2C_BMP280_SCL,
+    GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_CS,
+    GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_SCK,
+    GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MOSI,
+    GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO,
 )
+from wifi_config import SSID, PASSWORD
+
 from free_storage import df, ramf, convert_to_human_readable_str
 from timestamp import get_iso_timestamp
 from time_difference import get_time_difference
@@ -22,7 +28,7 @@ from print_history import (
     Logger,
     PrintHistory,
     PrintHistoryLoggingHandler,
-    ConsoleHandler,
+    FileHandler,
 )
 from html_helper import (
     generate_html,
@@ -42,6 +48,8 @@ from http_helper import (
 
 
 PROGRAM_VERSION = const("v0.1")
+
+AUTOMATIC_DEVICE_RESTART = True
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
@@ -87,6 +95,9 @@ HTML_CSS_DEFAULT = const(
     }
 """
 )
+
+MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
+
 
 # The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
@@ -143,11 +154,12 @@ counter_readings = {  # good readings, bad readings
 
 # Track recent logs
 print_history_instance = PrintHistory()
-# console_handler = ConsoleHandler()
 history_handler = PrintHistoryLoggingHandler(print_history_instance)
+file_handler = FileHandler(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
 
 # Configure the logger
 logger = Logger(name="outdoor_weather", level="DEBUG")
+logger.addHandler(file_handler)
 logger.addHandler(history_handler)
 
 # Track uptime
@@ -157,7 +169,25 @@ time_init = time.time()
 current_etag = None
 update_etag = True
 
-# SENSORS SHOULD BE INITALIZED OUTSIDE OF THE MAIN METHOD!
+# Track the last time the server was active
+last_server_activity = time.ticks_ms()
+
+# SENSORS/DEVICES SHOULD BE INITIALIZED OUTSIDE OF THE MAIN METHOD!
+
+# MicroSD Card Adapter
+microsd_card_adapter_spi = SPI(
+    0,
+    sck=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_SCK),
+    mosi=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MOSI),
+    miso=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO),
+)
+try:
+    # Initialize MicroSD card
+    sd = SDCard(microsd_card_adapter_spi, Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_CS))
+    os.mount(sd, MICROSD_CARD_FILESYSTEM_PREFIX)
+    logger.info("Successfully mounted MicroSD Card to", MICROSD_CARD_FILESYSTEM_PREFIX)
+except Exception as e:
+    logger.error("Failed to initialize/mount SD card:", e)
 
 # Onboard-LED
 led_onboard = Pin("LED", Pin.OUT)
@@ -174,6 +204,12 @@ bmp280_sensor_i2c = I2C(
 )
 i2c_scan(bmp280_sensor_i2c, logger.debug)
 bmp280_sensor = BMP280(bmp280_sensor_i2c)
+
+# COMMENT THE NEXT LINE IN ORDER TO NOT HAVE AUTOMATED RESTARTS!
+
+# Watchdog timer that restarts the device if it's not getting fed when the timeout is reached
+if AUTOMATIC_DEVICE_RESTART:
+    wdt = WDT(timeout=1000 * 8)  # in milliseconds
 
 
 def connect_to_wifi():
@@ -202,8 +238,10 @@ def sync_time():
         try:
             previous_time = time.localtime()
             ntptime.settime()
-            logger.info(f"Time synchronized with NTP server. Previous time: {previous_time}, New time: {time.localtime()}")
-            break 
+            logger.info(
+                f"Time synchronized with NTP server. Previous time: {previous_time}, New time: {time.localtime()}"
+            )
+            break
         except Exception as e:
             # Log the error
             logger.error(f"Failed to sync time: {e}")
@@ -283,7 +321,10 @@ def read_sensor(timer, sensor_id):
         for value, measurement_id in sensor_measurements:
             unit = sensor_unit[measurement_id]
             buffer = buffer_readings[measurement_id]
-            sensor_last_values[measurement_id] = value, sensor_last_values[measurement_id][1] 
+            sensor_last_values[measurement_id] = (
+                value,
+                sensor_last_values[measurement_id][1],
+            )
             last_value = buffer[-1][0] if len(buffer) > 0 else None
             sensor_tolerance = sensor_tolerances[measurement_id]
             change_detected = (
@@ -368,8 +409,10 @@ def render_html_data():
     ]:
         unit = sensor_unit[measurement_id]
         buffer = buffer_readings[measurement_id][::-1]
-        
-        html += f"<h2>{name} Records ({sensor_last_values[measurement_id][0]}{unit})</h2>"
+
+        html += (
+            f"<h2>{name} Records ({sensor_last_values[measurement_id][0]}{unit})</h2>"
+        )
         html += generate_html_table([unit, "Timestamp"], buffer)
 
     return generate_html(
@@ -448,6 +491,7 @@ def handle_web_request(socket):
     global time_init
     global update_etag
     global current_etag
+    global last_server_activity
 
     cl, addr = socket.accept()
     logger.debug(
@@ -490,9 +534,14 @@ def handle_web_request(socket):
             # Catch ETag entries from the request header if request is conditional
             if "If-None-Match" in request:
                 etag_header = (
-                    request.split("If-None-Match: ")[1].split("\r\n")[0].strip().strip('"')
+                    request.split("If-None-Match: ")[1]
+                    .split("\r\n")[0]
+                    .strip()
+                    .strip('"')
                 )
-                logger.debug(f"Found {etag_header=} ({current_etag=}, {etag_header == current_etag=})")
+                logger.debug(
+                    f"Found {etag_header=} ({current_etag=}, {etag_header == current_etag=})"
+                )
                 # If no etag change exist send not modified
                 if etag_header == current_etag:
                     response = generate_http_response(
@@ -519,7 +568,7 @@ def handle_web_request(socket):
                 content_type=HTTP_CONTENT_TYPE_TEXT,
                 status=HTTP_STATUS_NOT_FOUND,
             )
-        #print("response:", repr(response))
+        # print("response:", repr(response))
         cl.sendall(response)
         end_time = time.ticks_ms()
         logger.debug(f"Responded in {time.ticks_diff(end_time, start_time)}ms")
@@ -527,6 +576,8 @@ def handle_web_request(socket):
         logger.error("Error handling request:", e)
     finally:
         cl.close()
+        # Track the server activity time
+        last_server_activity = time.ticks_ms()
 
 
 def web_server(ip, port=80):
@@ -548,6 +599,16 @@ def web_server(ip, port=80):
         s.close()
 
 
+def web_server_health_check(timer):
+    if (
+        time.ticks_diff(time.ticks_ms(), last_server_activity) > 5 * 60 * 1000
+    ):  # If no activity in the last 5 minutes
+        logger.warning("No server activity detected in the last 5 minutes")
+    elif AUTOMATIC_DEVICE_RESTART:
+        # Feed the watchdog timer even if no activity
+        wdt.feed()
+
+
 def main():
     global time_init
 
@@ -555,15 +616,21 @@ def main():
     led_onboard.off()
     ip = connect_to_wifi()
     led_onboard.on()
+    if AUTOMATIC_DEVICE_RESTART:
+        wdt.feed()
 
     # Sync time
     sync_time()
     time_init = time.time()
+    if AUTOMATIC_DEVICE_RESTART:
+        wdt.feed()
 
     try:
         # Start the periodic sensor reading
         read_dht22_timer = Timer(-1)
-        read_dht22_timer.init(freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22)
+        read_dht22_timer.init(
+            freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22
+        )
         # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
         read_bmp280_timer = Timer(-1)
         read_bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
@@ -571,6 +638,13 @@ def main():
         restart_bmp280_timer = Timer(-1)
         restart_bmp280_timer.init(
             period=60 * 60 * 1000, mode=Timer.PERIODIC, callback=restart_bmp280
+        )
+
+        health_timer = machine.Timer(-1)
+        health_timer.init(
+            period=4 * 1000,
+            mode=machine.Timer.PERIODIC,
+            callback=web_server_health_check,
         )
 
         # Start the web server
@@ -586,9 +660,16 @@ def main():
 
 
 try:
+    logger.info("start main()...")
     main()
+    logger.info("main() finished, restarting...")
     # Restart the machine in case the main function terminates
-    print("Restarting...")
     reset()
 except KeyboardInterrupt:
     print("Program stopped.")
+except MemoryError:
+    print("Memory error detected, restarting...")
+    reset()
+except Exception as e:
+    print(f"Unexpected error: {e}, restarting...")
+    reset()

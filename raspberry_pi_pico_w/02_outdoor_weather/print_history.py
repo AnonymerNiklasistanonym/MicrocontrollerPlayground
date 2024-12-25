@@ -59,6 +59,24 @@ class ConsoleHandler(Handler):
         print(log_entry)
 
 
+class FileHandler(Handler):
+    """
+    A handler that writes log records to a specified log file.
+    """
+
+    def __init__(self, log_file, formatter=None):
+        super().__init__(formatter)
+        self.log_file = log_file
+
+    def emit(self, record):
+        log_entry = self.formatter.format(record)
+        try:
+            with open(self.log_file, 'a') as file:
+                file.write(log_entry + '\n')
+        except Exception as e:
+            print(f"Failed to write log to {self.log_file}: {e}")
+
+
 class Logger:
     """
     A lightweight logger for MicroPython with handler support.
