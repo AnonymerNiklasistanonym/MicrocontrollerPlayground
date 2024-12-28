@@ -1,4 +1,4 @@
-def generate_html(title, body, language="en", css=""):
+def generate_html(title, body, language="en", css=None, js=None):
     return f"""
     <!DOCTYPE html>
     <html lang="{language}">
@@ -6,9 +6,10 @@ def generate_html(title, body, language="en", css=""):
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{title}</title>
-            <style>{css}</style>
+            {'<style>' + css + '</style>' if css is not None else ''}
         </head>
         <body>{body}</body>
+        {'<script>' + js + '</script>' if js is not None else ''}
     </html>
     """
 
@@ -37,3 +38,4 @@ def generate_html_table(columns, rows):
 
 def generate_html_button(title, url):
     return f"<button onclick=\"window.location.href='{url}';\">{title}</button>"
+

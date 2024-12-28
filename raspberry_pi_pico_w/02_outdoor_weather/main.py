@@ -21,15 +21,16 @@ from pins_config import (
 )
 from wifi_config import SSID, PASSWORD
 
-from free_storage import df, ramf, convert_to_human_readable_str
+from csv_helper import append_to_csv
+from free_storage import df, ramf, sdf, convert_to_human_readable_str
 from timestamp import get_iso_timestamp
 from time_difference import get_time_difference
-from print_history import (
+from log_helper import (
     Logger,
-    PrintHistory,
-    PrintHistoryLoggingHandler,
-    FileHandler,
+    LogHandlerConsole,
+    LogHandlerFile,
 )
+from print_history import PrintHistory, PrintHistoryLogHandler
 from html_helper import (
     generate_html,
     generate_html_list,
@@ -44,12 +45,17 @@ from http_helper import (
     HTTP_CONTENT_TYPE_TEXT,
     HTTP_STATUS_NOT_MODIFIED,
     HTTP_STATUS_NOT_FOUND,
+    HTTP_STATUS_FOUND,
 )
+from content_html import HTML_CSS_DEFAULT, HTML_JS_DYNAMIC_DATA_DEFAULT
 
 
-PROGRAM_VERSION = const("v0.1")
+PROGRAM_VERSION = const("v0.2.2")
 
+# MAKE FALSE DURING DEBUG!!!!
 AUTOMATIC_DEVICE_RESTART = True
+
+MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
@@ -75,29 +81,7 @@ MEASUREMENT_ID_BMP280_AIR_PRESSURE = f"{SENSOR_ID_BMP280}_air_pressure_pa"
 MEASUREMENT_ID_DHT22_TEMPERATURE = f"{SENSOR_ID_DHT22}_temperature_celsius"
 MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = f"{SENSOR_ID_DHT22}_relative_humidity_percent"
 
-HTML_CSS_DEFAULT = const(
-    """
-    table {
-        width: 50%;
-        margin: 20px;
-        border-collapse: collapse;
-    }
-    th, td {
-        padding: 8px;
-        text-align: left;
-        border-bottom: 1px solid #ddd;
-    }
-    th {
-        background-color: #f2f2f2;
-    }
-    h2 {
-        color: #333;
-    }
-"""
-)
-
-MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
-
+WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S = const(10)
 
 # The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
@@ -154,13 +138,15 @@ counter_readings = {  # good readings, bad readings
 
 # Track recent logs
 print_history_instance = PrintHistory()
-history_handler = PrintHistoryLoggingHandler(print_history_instance)
-file_handler = FileHandler(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
+print_history_handler = PrintHistoryLogHandler(print_history_instance)
 
 # Configure the logger
 logger = Logger(name="outdoor_weather", level="DEBUG")
+console_handler = LogHandlerConsole()
+file_handler = LogHandlerFile(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
+logger.addHandler(console_handler)
 logger.addHandler(file_handler)
-logger.addHandler(history_handler)
+logger.addHandler(print_history_handler)
 
 # Track uptime
 time_init = time.time()
@@ -335,6 +321,23 @@ def read_sensor(timer, sensor_id):
             min_value, max_value = sensor_ranges[measurement_id]
             within_range = value >= min_value and value <= max_value
 
+            try:
+                if (
+                    abs(value - last_value) > 0
+                    if last_value is not None
+                    else True
+                ):
+                    append_to_csv(
+                        f"data_raw_{measurement_id}.csv",
+                        [unit, "Timestamp"],
+                        [[value, timestamp]],
+                        file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
+                    )
+            except OSError as e:
+                logger.error(
+                    f"[{measurement_id}] Unable to write data to CSV file: data_raw_{measurement_id}.csv ({e})"
+                )
+
             if change_detected and within_range and sensor_stabilized[sensor_id]:
                 logger.debug(
                     f"[{measurement_id}] Recorded: {value}{unit} at {timestamp}"
@@ -343,6 +346,18 @@ def read_sensor(timer, sensor_id):
                 if len(buffer) > BUFFER_COUNT:
                     buffer.pop(0)
                 update_etag = True
+
+                try:
+                    append_to_csv(
+                        f"data_{measurement_id}.csv",
+                        [unit, "Timestamp"],
+                        [[value, timestamp]],
+                        file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
+                    )
+                except OSError as e:
+                    logger.error(
+                        f"[{measurement_id}] Unable to write data to CSV file: data_{measurement_id}.csv ({e})"
+                    )
             else:
                 reason = f"not within tolerance {sensor_tolerance}{unit}"
                 if not within_range:
@@ -391,99 +406,100 @@ def restart_bmp280(timer):
     bmp280_sensor = BMP280(bmp280_sensor_i2c)
 
 
-def render_html_data():
-    """
-    Renders the HTML page displaying the temperature and humidity records in tables.
-    """
-    html = "<h1>Measurements</h1>"
-
-    html += generate_html_button("View Measurements as JSON", "/json_measurements")
-    html += generate_html_button("View Info", "/info")
-    html += generate_html_button("View Logs", "/logs")
-
-    for name, measurement_id in [
-        ("DHT22 Temperature", MEASUREMENT_ID_DHT22_TEMPERATURE),
-        ("DHT22 Relative Humidity", MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY),
-        ("BMP280 Temperature", MEASUREMENT_ID_BMP280_TEMPERATURE),
-        ("BMP280 Air Pressure", MEASUREMENT_ID_BMP280_AIR_PRESSURE),
-    ]:
-        unit = sensor_unit[measurement_id]
-        buffer = buffer_readings[measurement_id][::-1]
-
-        html += (
-            f"<h2>{name} Records ({sensor_last_values[measurement_id][0]}{unit})</h2>"
-        )
-        html += generate_html_table([unit, "Timestamp"], buffer)
-
+def render_dynamic_data_html():
     return generate_html(
-        "Measurements",
-        html,
+        "Loading...",
+        f'<h1 id="title">Loading...</h1><button id="loadButton" disabled>Loading...</button><div id="content"></div>',
         css=HTML_CSS_DEFAULT,
+        js=HTML_JS_DYNAMIC_DATA_DEFAULT,
     )
 
 
-def render_html_logs():
-    html = "<h1>Logs</h1>"
-    html += "<h2>Recent Logs:</h2>"
-
-    html += generate_html_table(
-        ["Message", "Timestamp"], print_history_instance.get_history()
+def generate_json_logs():
+    return ujson.dumps(
+        {
+            "title": "Logs",
+            "sections": [
+                {
+                    "title": f"Recent Logs",
+                    "data": [["Message", "Timestamp"]] + [[message, timestamp] for message, timestamp in print_history_instance.get_history()]
+                }
+            ],
+        }
     )
 
-    return generate_html(
-        "Logs",
-        html,
-        css=HTML_CSS_DEFAULT,
+
+def generate_json_data():
+    return ujson.dumps(
+        {
+            "title": "Data",
+            "sections": [
+                {
+                    "title": f"{measurement_id} ({sensor_last_values[measurement_id][0]}{sensor_unit[measurement_id]})",
+                    "data": [[sensor_unit[measurement_id], "Timestamp"]] + [[value, timestamp] for value, timestamp in values]
+                }
+                for measurement_id, values in buffer_readings.items()
+            ],
+        }
     )
 
 
-def render_html_info():
-    html = "<h1>Info</h1>"
-    html += "<h2>Free Storage:</h2>"
+def generate_json_readings():
+    return ujson.dumps(
+        {
+            "title": "Readings",
+            "sections": [
+                {
+                    "title": title,
+                    "data": values
+                }
+                for title, values in counter_readings.items()
+            ],
+        }
+    )
+
+
+def generate_json_info():
 
     file_space_f, file_space_t = df()
 
-    html += generate_html_list(
-        [
-            convert_to_human_readable_str(
-                "Free file space", file_space_f, T=848 * 1024, unit_name="KB"
-            ),
-            convert_to_human_readable_str("Free RAM space", *ramf(), unit_name="KB"),
-        ]
-    )
-
-    html += "<h2>Network:</h2>"
-
     sta = network.WLAN(network.STA_IF)
     ap = network.WLAN(network.AP_IF)
-
-    html += generate_html_list(
-        [
-            f"Device name in network: {ap.config('essid')}",
-            f"Network name: {sta.config('essid')}",
-        ]
-    )
-
-    html += "<h2>Misc:</h2>"
-
+    
     uptime_days, uptime_hours, uptime_minutes, uptime_seconds = get_time_difference(
         time_init
     )
-
-    html += generate_html_list(
-        [
-            f"Version: {PROGRAM_VERSION}",
-            f"OS information: {os.uname()}",
-            f"Uptime: {uptime_days}d {uptime_hours:02}:{uptime_minutes:02}:{uptime_seconds:02}",
-            f"Current time: {get_iso_timestamp()}",
-            f"Readings: {counter_readings}",
-        ]
-    )
-
-    return generate_html(
-        "Info",
-        html,
-        css=HTML_CSS_DEFAULT,
+    
+    return ujson.dumps(
+        {
+            "title": "Info",
+            "sections": [
+                {
+                    "title": "Free Storage",
+                    "data": {
+                        "Free file space": convert_to_human_readable_str(file_space_f, T=848 * 1024, unit_name="KB"),
+                        "Free RAM space": convert_to_human_readable_str(*ramf(), unit_name="KB"),
+                        "Free MicroSD storage space": convert_to_human_readable_str(*sdf(MICROSD_CARD_FILESYSTEM_PREFIX), unit_name="GB"), 
+                    }
+                },
+                {
+                    "title": "Network",
+                    "data": {
+                        "Device name in network": ap.config('essid'),
+                        "Network name": sta.config('essid'),
+                    }
+                },
+                {
+                    "title": "Misc",
+                    "data": {
+                        "Version": PROGRAM_VERSION,
+                        "OS information":  dict(zip(['sysname', 'nodename', 'release', 'version', 'machine'], os.uname())),
+                        "Uptime": f"{uptime_days}d {uptime_hours:02}:{uptime_minutes:02}:{uptime_seconds:02}",
+                        "Current time": get_iso_timestamp(),
+                    }
+                }
+            ],
+        }
     )
 
 
@@ -497,7 +513,7 @@ def handle_web_request(socket):
     logger.debug(
         "Client connected from",
         addr,
-        convert_to_human_readable_str("Free RAM space", *ramf(), unit_name="KB"),
+        convert_to_human_readable_str(*ramf(), unit_name="KB", name="Free RAM space"),
     )
     try:
         start_time = time.ticks_ms()
@@ -506,26 +522,6 @@ def handle_web_request(socket):
         if not request:
             # Client has closed the connection
             return
-        if "GET /measurements" in request:
-            response = generate_http_response(render_html_data())
-        elif "GET /info" in request:
-            response = generate_http_response(render_html_info())
-        elif "GET /logs" in request:
-            response = generate_http_response(render_html_logs())
-        elif "GET /restart_bmp280" in request:
-            restart_bmp280(None)
-            response = generate_http_response(
-                "Restarted BMP280 sensor", content_type=HTTP_CONTENT_TYPE_TEXT
-            )
-        elif "GET /sync_time" in request:
-            sync_time()
-            time_init = time.time()
-            response = generate_http_response(
-                f"Time sync completed: {get_iso_timestamp()}",
-                content_type=HTTP_CONTENT_TYPE_TEXT,
-            )
-        elif "GET /reset" in request:
-            reset()
         elif "GET /json_measurements" in request:
             if update_etag:
                 current_etag = generate_etag(buffer_readings)
@@ -562,6 +558,38 @@ def handle_web_request(socket):
                 response = generate_http_response(
                     json_str, content_type=HTTP_CONTENT_TYPE_JSON, etag=current_etag
                 )
+        elif "GET /dynamic_data" in request:
+            response = generate_http_response(render_dynamic_data_html())
+        elif "GET /info" in request:
+            response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_info")
+        elif "GET /json_info" in request:
+            response = generate_http_response(generate_json_info(), content_type=HTTP_CONTENT_TYPE_JSON)
+        elif "GET /data" in request:
+            response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_data")
+        elif "GET /json_data" in request:
+            response = generate_http_response(generate_json_data(), content_type=HTTP_CONTENT_TYPE_JSON)
+        elif "GET /logs" in request:
+            response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_logs")
+        elif "GET /json_logs" in request:
+            response = generate_http_response(generate_json_logs(), content_type=HTTP_CONTENT_TYPE_JSON)
+        elif "GET /readings" in request:
+            response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_readings")
+        elif "GET /json_readings" in request:
+            response = generate_http_response(generate_json_readings(), content_type=HTTP_CONTENT_TYPE_JSON)
+        elif "GET /restart_bmp280" in request:
+            restart_bmp280(None)
+            response = generate_http_response(
+                "Restarted BMP280 sensor", content_type=HTTP_CONTENT_TYPE_TEXT
+            )
+        elif "GET /sync_time" in request:
+            sync_time()
+            time_init = time.time()
+            response = generate_http_response(
+                f"Time sync completed: {get_iso_timestamp()}",
+                content_type=HTTP_CONTENT_TYPE_TEXT,
+            )
+        elif "GET /reset" in request:
+            reset()
         else:
             response = generate_http_response(
                 "Page not found",
@@ -571,7 +599,10 @@ def handle_web_request(socket):
         # print("response:", repr(response))
         cl.sendall(response)
         end_time = time.ticks_ms()
-        logger.debug(f"Responded in {time.ticks_diff(end_time, start_time)}ms")
+        logger.debug(
+            f"Responded in {time.ticks_diff(end_time, start_time)}ms",
+            convert_to_human_readable_str(*ramf(), unit_name="KB", name="Free RAM space"),
+        )
     except Exception as e:
         logger.error("Error handling request:", e)
     finally:
@@ -601,9 +632,9 @@ def web_server(ip, port=80):
 
 def web_server_health_check(timer):
     if (
-        time.ticks_diff(time.ticks_ms(), last_server_activity) > 5 * 60 * 1000
+        time.ticks_diff(time.ticks_ms(), last_server_activity) > WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S * 60 * 1000
     ):  # If no activity in the last 5 minutes
-        logger.warning("No server activity detected in the last 5 minutes")
+        logger.warning(f"No server activity detected in the last {WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S} min")
     elif AUTOMATIC_DEVICE_RESTART:
         # Feed the watchdog timer even if no activity
         wdt.feed()
