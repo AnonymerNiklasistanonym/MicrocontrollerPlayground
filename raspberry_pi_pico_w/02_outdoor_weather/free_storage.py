@@ -13,15 +13,21 @@ def df():
     BLOCK_SIZE = s[1]    # The size of each block in bytes
     return F * BLOCK_SIZE, T * BLOCK_SIZE
 
+
 def ramf():
     """Free RAM space"""
     F = gc.mem_free()   # Free memory in bytes
     A = gc.mem_alloc()  # Allocated memory in bytes
     return F, F + A
 
-def sdf(mount_point):
+
+def sdf(mount_point, file_path_prefix="/"):
     """Free storage space on the SD card in bytes"""
     try:
+        file_exists = mount_point[len(file_path_prefix):] in os.listdir(file_path_prefix)
+        if not file_exists:
+            return -1, -1
+        
         statvfs = os.statvfs(mount_point)
         BLOCK_SIZE = statvfs[0]    # Block size
         F = statvfs[3]             # The number of free blocks
@@ -29,6 +35,7 @@ def sdf(mount_point):
         return BLOCK_SIZE * F, BLOCK_SIZE * T
     except OSError as e:
         return -1, -1
+
 
 def convert_to_human_readable_str(F, T=None, name=None, unit_name="B"):
     name_str = f"{name}: " if name is not None else ""

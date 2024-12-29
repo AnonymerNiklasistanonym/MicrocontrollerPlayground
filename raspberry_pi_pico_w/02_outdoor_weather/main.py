@@ -50,12 +50,13 @@ from http_helper import (
 from content_html import HTML_CSS_DEFAULT, HTML_JS_DYNAMIC_DATA_DEFAULT
 
 
-PROGRAM_VERSION = const("v0.2.2")
+PROGRAM_VERSION = const("v0.2.3")
 
 # MAKE FALSE DURING DEBUG!!!!
-AUTOMATIC_DEVICE_RESTART = True
+AUTOMATIC_DEVICE_RESTART = const(True)
 
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
+
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
@@ -158,6 +159,7 @@ update_etag = True
 # Track the last time the server was active
 last_server_activity = time.ticks_ms()
 
+
 # SENSORS/DEVICES SHOULD BE INITIALIZED OUTSIDE OF THE MAIN METHOD!
 
 # MicroSD Card Adapter
@@ -167,13 +169,20 @@ microsd_card_adapter_spi = SPI(
     mosi=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MOSI),
     miso=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO),
 )
-try:
-    # Initialize MicroSD card
-    sd = SDCard(microsd_card_adapter_spi, Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_CS))
-    os.mount(sd, MICROSD_CARD_FILESYSTEM_PREFIX)
-    logger.info("Successfully mounted MicroSD Card to", MICROSD_CARD_FILESYSTEM_PREFIX)
-except Exception as e:
-    logger.error("Failed to initialize/mount SD card:", e)
+
+def mount_sdcard():
+    try:
+        os.unmount(MICROSD_CARD_FILESYSTEM_PREFIX)
+    except Exception as e:
+        logger.warning("Could not unmount MicroSD Card on", MICROSD_CARD_FILESYSTEM_PREFIX)
+    try:
+        sd = SDCard(microsd_card_adapter_spi, Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_CS))
+        os.mount(sd, MICROSD_CARD_FILESYSTEM_PREFIX)
+        logger.info("Successfully initialized/mounted MicroSD Card to", MICROSD_CARD_FILESYSTEM_PREFIX)
+    except Exception as e:
+        logger.error("Failed to initialize/mount SD card:", e)
+
+mount_sdcard()
 
 # Onboard-LED
 led_onboard = Pin("LED", Pin.OUT)
@@ -191,7 +200,6 @@ bmp280_sensor_i2c = I2C(
 i2c_scan(bmp280_sensor_i2c, logger.debug)
 bmp280_sensor = BMP280(bmp280_sensor_i2c)
 
-# COMMENT THE NEXT LINE IN ORDER TO NOT HAVE AUTOMATED RESTARTS!
 
 # Watchdog timer that restarts the device if it's not getting fed when the timeout is reached
 if AUTOMATIC_DEVICE_RESTART:
@@ -406,6 +414,41 @@ def restart_bmp280(timer):
     bmp280_sensor = BMP280(bmp280_sensor_i2c)
 
 
+def render_dashboard_html():
+    api = [
+        ("Measurements", "/json_measurements"),
+    ]
+    routes = [
+        ("Info", "/info"),
+        ("Data", "/data"),
+        ("Logs", "/logs"),
+        ("Readings", "/readings"),
+    ]
+    actions = [
+        ("Reset", "/reset"),
+        ("Time sync", "/sync_time"),
+        ("Remount SDCard", "/remount_sdcard"),
+        ("Restart BMP280 sensor", "/restart_bmp280"),
+    ]
+
+    html = f"<h1>Dashboard</h1>"
+    html += f"<h2>API</h2>"
+    for name, url in api:
+        html += generate_html_button(name, url)
+    html += f"<h2>Routes</h2>"
+    for name, url in routes:
+        html += generate_html_button(name, url)
+    html += f"<h2>Actions</h2>"
+    for name, url in actions:
+        html += generate_html_button(name, url)
+
+    return generate_html(
+        "Dashboard",
+        html,
+        css=HTML_CSS_DEFAULT,
+    )
+
+
 def render_dynamic_data_html():
     return generate_html(
         "Loading...",
@@ -558,6 +601,8 @@ def handle_web_request(socket):
                 response = generate_http_response(
                     json_str, content_type=HTTP_CONTENT_TYPE_JSON, etag=current_etag
                 )
+        elif "GET /dashboard" in request:
+            response = generate_http_response(render_dashboard_html())
         elif "GET /dynamic_data" in request:
             response = generate_http_response(render_dynamic_data_html())
         elif "GET /info" in request:
@@ -580,6 +625,11 @@ def handle_web_request(socket):
             restart_bmp280(None)
             response = generate_http_response(
                 "Restarted BMP280 sensor", content_type=HTTP_CONTENT_TYPE_TEXT
+            )
+        elif "GET /remount_sdcard" in request:
+            mount_sdcard()
+            response = generate_http_response(
+                "Remount SDCard", content_type=HTTP_CONTENT_TYPE_TEXT
             )
         elif "GET /sync_time" in request:
             sync_time()
@@ -665,12 +715,21 @@ def main():
         # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
         read_bmp280_timer = Timer(-1)
         read_bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
-        # Since the BMP280 timer is crashing all the time restart it periodically (every hour)
+        # Since the BMP280 timer is crashing all the time restart it periodically
         restart_bmp280_timer = Timer(-1)
         restart_bmp280_timer.init(
             period=60 * 60 * 1000, mode=Timer.PERIODIC, callback=restart_bmp280
         )
+        
+        # Since the SD card sometimes breaks or can be taken out remount it periodically
+        sdcard_remount_timer = machine.Timer(-1)
+        sdcard_remount_timer.init(
+            period=20 * 60 * 1000,
+            mode=machine.Timer.PERIODIC,
+            callback=lambda timer: mount_sdcard(),
+        )
 
+        # If the webserver is not being used for some time (e.g. crashes automatically restart the device)
         health_timer = machine.Timer(-1)
         health_timer.init(
             period=4 * 1000,
@@ -681,26 +740,27 @@ def main():
         # Start the web server
         web_server(ip)
     except Exception as e:
-        print("Error occurred:", e)
+        logger.error("Error occurred in main:", e)
     finally:
         # Ensure that all timers are stopped if there's an error
         read_dht22_timer.deinit()
         read_bmp280_timer.deinit()
         restart_bmp280_timer.deinit()
-        print("Timers have been stopped.")
+        logger.info("Timers have been stopped")
 
 
-try:
-    logger.info("start main()...")
-    main()
-    logger.info("main() finished, restarting...")
-    # Restart the machine in case the main function terminates
-    reset()
-except KeyboardInterrupt:
-    print("Program stopped.")
-except MemoryError:
-    print("Memory error detected, restarting...")
-    reset()
-except Exception as e:
-    print(f"Unexpected error: {e}, restarting...")
-    reset()
+if __name__ == "__main__":
+    try:
+        logger.info("start main()...")
+        main()
+        logger.info("main() finished, restarting...")
+        # Restart the machine in case the main function terminates
+        reset()
+    except KeyboardInterrupt:
+        print("Program stopped.")
+    except MemoryError:
+        print("Memory error detected, restarting...")
+        reset()
+    except Exception as e:
+        print(f"Unexpected error: {e}, restarting...")
+        reset()
