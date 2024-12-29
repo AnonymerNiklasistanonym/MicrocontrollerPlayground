@@ -8,10 +8,11 @@ HTTP_STATUS_NOT_FOUND = (404, "Not Found")
 
 HTTP_CONTENT_TYPE_HTML = const("text/html")
 HTTP_CONTENT_TYPE_JSON = const("application/json")
+HTTP_CONTENT_TYPE_JS = const("application/javascript")
 HTTP_CONTENT_TYPE_TEXT = const("text/plain")
 
 
-def generate_http_response(body, content_type=HTTP_CONTENT_TYPE_HTML, status=HTTP_STATUS_OK, etag=None, location=None):
+def generate_http_response(body, content_type=HTTP_CONTENT_TYPE_HTML, status=HTTP_STATUS_OK, etag=None, location=None, maxAge=None):
     response = [f"HTTP/1.1 {status[0]} {status[1]}"]
     if location is not None:
         response.append(f'Location: {location}')
@@ -19,6 +20,8 @@ def generate_http_response(body, content_type=HTTP_CONTENT_TYPE_HTML, status=HTT
         response.append(f"Content-Type: {content_type}")
     if etag is not None:
         response.append(f'ETag: "{etag}"')
+    if maxAge is not None:
+        response.append(f'Cache-Control: public, max-age={maxAge}')
     response.append("")
     if body is None:
         response.append("")

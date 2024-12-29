@@ -1,4 +1,9 @@
-def generate_html(title, body, language="en", css=None, js=None):
+def generate_html(title, body, language="en", css=None, js=None, css_files=[], js_files=[]):
+    header_file_str = ""
+    for js_file in js_files:
+        header_file_str += f'<script src="{js_file}" defer></script>'
+    for css_file in css_files:
+        header_file_str += f'<link rel="stylesheet" href="{css_file}">'
     return f"""
     <!DOCTYPE html>
     <html lang="{language}">
@@ -6,6 +11,7 @@ def generate_html(title, body, language="en", css=None, js=None):
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{title}</title>
+            {header_file_str}
             {'<style>' + css + '</style>' if css is not None else ''}
         </head>
         <body>{body}</body>

@@ -41,6 +41,7 @@ from i2c_scan import i2c_scan
 from http_helper import (
     generate_http_response,
     generate_etag,
+    HTTP_CONTENT_TYPE_JS,
     HTTP_CONTENT_TYPE_JSON,
     HTTP_CONTENT_TYPE_TEXT,
     HTTP_STATUS_NOT_MODIFIED,
@@ -50,7 +51,7 @@ from http_helper import (
 from content_html import HTML_CSS_DEFAULT, HTML_JS_DYNAMIC_DATA_DEFAULT
 
 
-PROGRAM_VERSION = const("v0.2.3")
+PROGRAM_VERSION = const("v0.2.5")
 
 # MAKE FALSE DURING DEBUG!!!!
 AUTOMATIC_DEVICE_RESTART = const(True)
@@ -452,9 +453,9 @@ def render_dashboard_html():
 def render_dynamic_data_html():
     return generate_html(
         "Loading...",
-        f'<h1 id="title">Loading...</h1><button id="loadButton" disabled>Loading...</button><div id="content"></div>',
+        '<h1 id="title">Loading...</h1><button id="loadButton" disabled>Loading...</button><div id="content"></div>',
         css=HTML_CSS_DEFAULT,
-        js=HTML_JS_DYNAMIC_DATA_DEFAULT,
+        js_files=["/js_dynamic_data"],
     )
 
 
@@ -464,7 +465,7 @@ def generate_json_logs():
             "title": "Logs",
             "sections": [
                 {
-                    "title": f"Recent Logs",
+                    "title": "Recent Logs",
                     "data": [["Message", "Timestamp"]] + [[message, timestamp] for message, timestamp in print_history_instance.get_history()]
                 }
             ],
@@ -509,10 +510,6 @@ def generate_json_info():
     sta = network.WLAN(network.STA_IF)
     ap = network.WLAN(network.AP_IF)
     
-    uptime_days, uptime_hours, uptime_minutes, uptime_seconds = get_time_difference(
-        time_init
-    )
-    
     return ujson.dumps(
         {
             "title": "Info",
@@ -537,7 +534,7 @@ def generate_json_info():
                     "data": {
                         "Version": PROGRAM_VERSION,
                         "OS information":  dict(zip(['sysname', 'nodename', 'release', 'version', 'machine'], os.uname())),
-                        "Uptime": f"{uptime_days}d {uptime_hours:02}:{uptime_minutes:02}:{uptime_seconds:02}",
+                        "Uptime": dict(zip(['days', 'hours', 'minutes', 'seconds'], get_time_difference(time_init))),
                         "Current time": get_iso_timestamp(),
                     }
                 }
@@ -602,9 +599,11 @@ def handle_web_request(socket):
                     json_str, content_type=HTTP_CONTENT_TYPE_JSON, etag=current_etag
                 )
         elif "GET /dashboard" in request:
-            response = generate_http_response(render_dashboard_html())
+            response = generate_http_response(render_dashboard_html(), maxAge=60 * 60 * 24)
         elif "GET /dynamic_data" in request:
-            response = generate_http_response(render_dynamic_data_html())
+            response = generate_http_response(render_dynamic_data_html(), maxAge=60 * 60 * 24)
+        elif "GET /js_dynamic_data" in request:
+            response = generate_http_response(HTML_JS_DYNAMIC_DATA_DEFAULT, content_type=HTTP_CONTENT_TYPE_JS, maxAge=60 * 60 * 24)
         elif "GET /info" in request:
             response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_info")
         elif "GET /json_info" in request:
