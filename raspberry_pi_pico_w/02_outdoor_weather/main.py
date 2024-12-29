@@ -48,8 +48,6 @@ from log_helper import (
 from print_history import PrintHistory, PrintHistoryLogHandler
 from html_helper import (
     generate_html,
-    generate_html_list,
-    generate_html_table,
     generate_html_button,
 )
 from i2c_scan import i2c_scan
@@ -61,10 +59,10 @@ from http_helper import (
 # Script constants
 
 # IMPORTANT: IF THIS IS FALSE THE DEVICE AUTO RESTARTS!
-DEBUG = const(False)
+DEBUG = const(True)
 
 PROGRAM_NAME = const("outdoor_weather")
-PROGRAM_VERSION = const("v0.2.6")
+PROGRAM_VERSION = const("v0.2.7")
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
 AUTOMATIC_DEVICE_RESTART = const(not DEBUG)
 
@@ -102,12 +100,12 @@ UNIT_TEMPERATURE_CELSIUS = const("°C")
 UNIT_RELATIVE_HUMIDITY_PERCENT = const("%")
 UNIT_AIR_PRESSURE_PA = const("Pa")
 
-WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S = const(10)
-
+# The amount of time between no web response and an automatic restart (if enabled)
+WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S = const(30)
 # The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
 # The amount of values to keep in the buffers
-BUFFER_COUNT = const(10)
+BUFFER_SIZE = const(10)
 
 # Script global variables
 
@@ -160,7 +158,7 @@ counter_readings = {  # good readings, bad readings
 }
 
 # Track recent logs
-print_history_instance = PrintHistory(max_size=BUFFER_COUNT)
+print_history_instance = PrintHistory(max_size=BUFFER_SIZE)
 print_history_handler = PrintHistoryLogHandler(print_history_instance)
 
 # Configure the logger
@@ -375,7 +373,7 @@ def read_sensor(timer, sensor_id):
                     f"[{measurement_id}] Recorded: {value}{unit} at {timestamp}"
                 )
                 buffer.append([value, timestamp])
-                if len(buffer) > BUFFER_COUNT:
+                if len(buffer) > BUFFER_SIZE:
                     buffer.pop(0)
                 update_etag = True
 
@@ -556,9 +554,13 @@ def generate_json_info():
                     "title": "Misc",
                     "data": {
                         "Version": PROGRAM_VERSION,
+                        "Debug": DEBUG,
+                        "Automatic Restart": AUTOMATIC_DEVICE_RESTART,
                         "OS information":  dict(zip(['sysname', 'nodename', 'release', 'version', 'machine'], os.uname())),
                         "Uptime": dict(zip(['days', 'hours', 'minutes', 'seconds'], get_time_difference(time_init))),
                         "Current time": get_iso_timestamp(),
+                        "Buffer size": BUFFER_SIZE,
+                        "Health check time difference": f"{WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S}s",
                     }
                 }
             ],
@@ -795,3 +797,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Unexpected error: {e}, restarting...")
         reset()
+
