@@ -1,9 +1,9 @@
 def generate_html(title, body, language="en", css=None, js=None, css_files=[], js_files=[]):
     header_file_str = ""
     for js_file in js_files:
-        header_file_str += f'<script src="{js_file}" defer></script>'
+        header_file_str += f'<script src="{js_file}.js" defer></script>'
     for css_file in css_files:
-        header_file_str += f'<link rel="stylesheet" href="{css_file}">'
+        header_file_str += f'<link rel="stylesheet" href="{css_file}.css">'
     return f"""
     <!DOCTYPE html>
     <html lang="{language}">

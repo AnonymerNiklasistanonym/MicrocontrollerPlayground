@@ -1,7 +1,7 @@
 from time import localtime
 
 
-def get_iso_timestamp():
+def get_iso_timestamp() -> str:
     """
     Get the current time in ISO 8601 format (e.g., "2024-12-15T14:30:00Z").
     """

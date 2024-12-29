@@ -7,8 +7,12 @@ import ujson
 from machine import I2C, SPI, Pin, Timer, reset, WDT
 from dht import DHT22
 
+# Local libraries
+
 from bmp280 import *
 from sdcard import SDCard
+
+# Constants
 
 from pins_config import (
     GPIO_PIN_INPUT_DHT22,
@@ -20,6 +24,17 @@ from pins_config import (
     GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO,
 )
 from wifi_config import SSID, PASSWORD
+from http_helper import (
+    HTTP_CONTENT_TYPE_CSS,
+    HTTP_CONTENT_TYPE_JS,
+    HTTP_CONTENT_TYPE_JSON,
+    HTTP_CONTENT_TYPE_TEXT,
+    HTTP_STATUS_NOT_MODIFIED,
+    HTTP_STATUS_NOT_FOUND,
+    HTTP_STATUS_FOUND,
+)
+
+# Local files
 
 from csv_helper import append_to_csv
 from free_storage import df, ramf, sdf, convert_to_human_readable_str
@@ -41,54 +56,60 @@ from i2c_scan import i2c_scan
 from http_helper import (
     generate_http_response,
     generate_etag,
-    HTTP_CONTENT_TYPE_JS,
-    HTTP_CONTENT_TYPE_JSON,
-    HTTP_CONTENT_TYPE_TEXT,
-    HTTP_STATUS_NOT_MODIFIED,
-    HTTP_STATUS_NOT_FOUND,
-    HTTP_STATUS_FOUND,
 )
-from content_html import HTML_CSS_DEFAULT, HTML_JS_DYNAMIC_DATA_DEFAULT
 
+# Script constants
 
-PROGRAM_VERSION = const("v0.2.5")
+# IMPORTANT: IF THIS IS FALSE THE DEVICE AUTO RESTARTS!
+DEBUG = const(False)
 
-# MAKE FALSE DURING DEBUG!!!!
-AUTOMATIC_DEVICE_RESTART = const(True)
-
+PROGRAM_NAME = const("outdoor_weather")
+PROGRAM_VERSION = const("v0.2.6")
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
-
+AUTOMATIC_DEVICE_RESTART = const(not DEBUG)
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
-BMP280_TOLERANCE_AIR_PRESSURE = const(
-    1 * 100
-)  # Pascal (Pascal * 100 to convert from Hectopascal)
-BMP280_RANGE_AIR_PRESSURE = (300 * 100, 1100 * 100)
+BMP280_TOLERANCE_AIR_PRESSURE = const(1 * 100)  # Pascal (Pascal * 100 to convert from Hectopascal)
+_BMP280_RANGE_AIR_PRESSURE_MIN = const(300 * 100)
+_BMP280_RANGE_AIR_PRESSURE_MAX = const(1100 * 100)
+BMP280_RANGE_AIR_PRESSURE = (_BMP280_RANGE_AIR_PRESSURE_MIN, _BMP280_RANGE_AIR_PRESSURE_MAX)
 BMP280_TOLERANCE_TEMPERATURE = const(0.5)  # Degrees Celsius
-BMP280_RANGE_TEMPERATURE = (-40, 85)
+_BMP280_RANGE_TEMPERATURE_MIN = const(-40)
+_BMP280_RANGE_TEMPERATURE_MAX = const(85)
+BMP280_RANGE_TEMPERATURE = (_BMP280_RANGE_TEMPERATURE_MIN, _BMP280_RANGE_TEMPERATURE_MAX)
 
 DHT22_FREQUENCY = const(0.5)  # Hertz
 DHT22_TOLERANCE_TEMPERATURE = const(0.5)  # Degrees Celsius
-DHT22_RANGE_TEMPERATURE = (-40, 80)
+_DHT22_RANGE_TEMPERATURE_MIN = const(-40)
+_DHT22_RANGE_TEMPERATURE_MAX = const(80)
+DHT22_RANGE_TEMPERATURE = (_DHT22_RANGE_TEMPERATURE_MIN, _DHT22_RANGE_TEMPERATURE_MAX)
 DHT22_TOLERANCE_RELATIVE_HUMIDITY = const(2.0)  # Percent
-DHT22_RANGE_RELATIVE_HUMIDITY = (0, 100)
+_DHT22_RANGE_RELATIVE_HUMIDITY_MIN = const(0)
+_DHT22_RANGE_RELATIVE_HUMIDITY_MAX = const(100)
+DHT22_RANGE_RELATIVE_HUMIDITY = (_DHT22_RANGE_RELATIVE_HUMIDITY_MIN, _DHT22_RANGE_RELATIVE_HUMIDITY_MAX)
 
 SENSOR_ID_BMP280 = const("bmp280")
 SENSOR_ID_DHT22 = const("dht22")
 
-MEASUREMENT_ID_BMP280_TEMPERATURE = f"{SENSOR_ID_BMP280}_temperature_celsius"
-MEASUREMENT_ID_BMP280_AIR_PRESSURE = f"{SENSOR_ID_BMP280}_air_pressure_pa"
+MEASUREMENT_ID_BMP280_TEMPERATURE = const("bmp280_temperature_celsius")
+MEASUREMENT_ID_BMP280_AIR_PRESSURE = const("bmp280_air_pressure_pa")
 
-MEASUREMENT_ID_DHT22_TEMPERATURE = f"{SENSOR_ID_DHT22}_temperature_celsius"
-MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = f"{SENSOR_ID_DHT22}_relative_humidity_percent"
+MEASUREMENT_ID_DHT22_TEMPERATURE = const("dht22_temperature_celsius")
+MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY = const("dht22_relative_humidity_percent")
+
+UNIT_TEMPERATURE_CELSIUS = const("°C")
+UNIT_RELATIVE_HUMIDITY_PERCENT = const("%")
+UNIT_AIR_PRESSURE_PA = const("Pa")
 
 WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S = const(10)
 
 # The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
 # The amount of values to keep in the buffers
-BUFFER_COUNT = const(20)
+BUFFER_COUNT = const(10)
+
+# Script global variables
 
 # Sensor stabilization
 sensor_stabilized = {  # Stabilized
@@ -104,10 +125,10 @@ sensor_last_values = {  # Last value, # of no changes
 
 # Sensor information
 sensor_unit = {  # Name of measured value unit
-    MEASUREMENT_ID_DHT22_TEMPERATURE: "°C",
-    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: "%",
-    MEASUREMENT_ID_BMP280_TEMPERATURE: "°C",
-    MEASUREMENT_ID_BMP280_AIR_PRESSURE: "Pa",
+    MEASUREMENT_ID_DHT22_TEMPERATURE: UNIT_TEMPERATURE_CELSIUS,
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: UNIT_RELATIVE_HUMIDITY_PERCENT,
+    MEASUREMENT_ID_BMP280_TEMPERATURE: UNIT_TEMPERATURE_CELSIUS,
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: UNIT_AIR_PRESSURE_PA,
 }
 sensor_tolerances = {  # min, max
     MEASUREMENT_ID_DHT22_TEMPERATURE: DHT22_TOLERANCE_TEMPERATURE,
@@ -139,16 +160,18 @@ counter_readings = {  # good readings, bad readings
 }
 
 # Track recent logs
-print_history_instance = PrintHistory()
+print_history_instance = PrintHistory(max_size=BUFFER_COUNT)
 print_history_handler = PrintHistoryLogHandler(print_history_instance)
 
 # Configure the logger
-logger = Logger(name="outdoor_weather", level="DEBUG")
-console_handler = LogHandlerConsole()
+logger = Logger(name=PROGRAM_NAME, level="DEBUG")
+if DEBUG:
+    console_handler = LogHandlerConsole()
+    logger.addHandler(console_handler)
 file_handler = LogHandlerFile(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
-logger.addHandler(console_handler)
 logger.addHandler(file_handler)
 logger.addHandler(print_history_handler)
+    
 
 # Track uptime
 time_init = time.time()
@@ -446,16 +469,16 @@ def render_dashboard_html():
     return generate_html(
         "Dashboard",
         html,
-        css=HTML_CSS_DEFAULT,
+        css_files=["/content_html"],
     )
 
 
-def render_dynamic_data_html():
+def render_dynamic_data_html() -> str:
     return generate_html(
         "Loading...",
-        '<h1 id="title">Loading...</h1><button id="loadButton" disabled>Loading...</button><div id="content"></div>',
-        css=HTML_CSS_DEFAULT,
-        js_files=["/js_dynamic_data"],
+        '<h1 id="title">Loading...</h1><button id="loadButton" disabled>Loading...</button><button id="refreshButton" disabled>Refresh</button><div id="content"></div>',
+        css_files=["/content_html"],
+        js_files=["/content_html_dynamic_data"],
     )
 
 
@@ -559,6 +582,7 @@ def handle_web_request(socket):
         start_time = time.ticks_ms()
         request = cl.recv(1024).decode("utf-8")
         logger.debug(request)
+        send_file_contents = []
         if not request:
             # Client has closed the connection
             return
@@ -602,8 +626,12 @@ def handle_web_request(socket):
             response = generate_http_response(render_dashboard_html(), maxAge=60 * 60 * 24)
         elif "GET /dynamic_data" in request:
             response = generate_http_response(render_dynamic_data_html(), maxAge=60 * 60 * 24)
-        elif "GET /js_dynamic_data" in request:
-            response = generate_http_response(HTML_JS_DYNAMIC_DATA_DEFAULT, content_type=HTTP_CONTENT_TYPE_JS, maxAge=60 * 60 * 24)
+        elif "GET /content_html_dynamic_data.js" in request:
+            response = generate_http_response("", content_type=HTTP_CONTENT_TYPE_JS, maxAge=60 * 60 * 24)
+            send_file_contents.append("/content_html_dynamic_data.js")
+        elif "GET /content_html.css" in request:
+            response = generate_http_response("", content_type=HTTP_CONTENT_TYPE_CSS, maxAge=60 * 60 * 24)
+            send_file_contents.append("/content_html.css")
         elif "GET /info" in request:
             response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dynamic_data?endpoint=json_info")
         elif "GET /json_info" in request:
@@ -645,8 +673,12 @@ def handle_web_request(socket):
                 content_type=HTTP_CONTENT_TYPE_TEXT,
                 status=HTTP_STATUS_NOT_FOUND,
             )
-        # print("response:", repr(response))
+        # print("response:", repr(response), send_file_contents)
         cl.sendall(response)
+        for send_file_content in send_file_contents:
+            with open(send_file_content, "r") as f:
+                for line in f:
+                    cl.sendall(line)
         end_time = time.ticks_ms()
         logger.debug(
             f"Responded in {time.ticks_diff(end_time, start_time)}ms",
@@ -668,7 +700,7 @@ def web_server(ip, port=80):
         logger.info(f"Successfully bound to {ip}:{port}")
         s.listen(1)
         logger.info("Listening on", addr)
-
+        
         while True:
             handle_web_request(s)
 

@@ -1,7 +1,7 @@
 from time import time
 
 
-def get_time_difference(start_time):
+def get_time_difference(start_time) -> tuple[int, int, int, int]:
     time_diff_s = time() - start_time
     minutes, seconds = divmod(time_diff_s, 60)
     hours, minutes = divmod(minutes, 60)
