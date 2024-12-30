@@ -62,7 +62,7 @@ from http_helper import (
 DEBUG = const(True)
 
 PROGRAM_NAME = const("outdoor_weather")
-PROGRAM_VERSION = const("v0.2.7")
+PROGRAM_VERSION = const("v0.2.8")
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
 AUTOMATIC_DEVICE_RESTART = const(not DEBUG)
 
@@ -100,8 +100,12 @@ UNIT_TEMPERATURE_CELSIUS = const("°C")
 UNIT_RELATIVE_HUMIDITY_PERCENT = const("%")
 UNIT_AIR_PRESSURE_PA = const("Pa")
 
+COUNTER_READINGS_GOOD = const("good")
+COUNTER_READINGS_OUTSIDE_RANGE = const("outside_range")
+COUNTER_READINGS_ERROR = const("error")
+
 # The amount of time between no web response and an automatic restart (if enabled)
-WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S = const(30)
+WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN = const(2)
 # The amount of values until a sensor is stabilized
 SENSOR_STABILIZE_COUNT = const(100)
 # The amount of values to keep in the buffers
@@ -149,12 +153,12 @@ buffer_readings = {  # (value: number, iso timestamp: str)
     MEASUREMENT_ID_BMP280_AIR_PRESSURE: [],
 }
 counter_readings = {  # good readings, bad readings
-    MEASUREMENT_ID_DHT22_TEMPERATURE: {"good": 0, "bad": 0},
-    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: {"good": 0, "bad": 0},
-    MEASUREMENT_ID_BMP280_TEMPERATURE: {"good": 0, "bad": 0},
-    MEASUREMENT_ID_BMP280_AIR_PRESSURE: {"good": 0, "bad": 0},
-    SENSOR_ID_DHT22: {"good": 0},
-    SENSOR_ID_BMP280: {"good": 0},
+    MEASUREMENT_ID_DHT22_TEMPERATURE: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_OUTSIDE_RANGE: 0},
+    MEASUREMENT_ID_DHT22_RELATIVE_HUMIDITY: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_OUTSIDE_RANGE: 0},
+    MEASUREMENT_ID_BMP280_TEMPERATURE: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_OUTSIDE_RANGE: 0},
+    MEASUREMENT_ID_BMP280_AIR_PRESSURE: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_OUTSIDE_RANGE: 0},
+    SENSOR_ID_DHT22: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_ERROR: 0},
+    SENSOR_ID_BMP280: {COUNTER_READINGS_GOOD: 0, COUNTER_READINGS_ERROR: 0},
 }
 
 # Track recent logs
@@ -271,10 +275,11 @@ def read_sensor(timer, sensor_id):
     global buffer_readings
     global counter_readings
     global update_etag
+    
+    timestamp = get_iso_timestamp()
 
     try:
         sensor_measurements = []
-        timestamp = get_iso_timestamp()
 
         if sensor_id == SENSOR_ID_BMP280 and bmp280_sensor is not None:
             temp = bmp280_sensor.temperature
@@ -298,63 +303,40 @@ def read_sensor(timer, sensor_id):
                 "Unknown {sensor_id=} or sensor not found {dht22=}/{bmp280=}"
             )
 
-        counter_readings[sensor_id]["good"] += 1
+        counter_readings[sensor_id][COUNTER_READINGS_GOOD] += 1
 
-        if not sensor_stabilized[sensor_id]:
-            changes_detected = False
-            for value, measurement_id in sensor_measurements:
-                sensor_last_value, count = sensor_last_values[measurement_id]
-                sensor_tolerance = sensor_tolerances[measurement_id]
-                if sensor_last_value is None:
-                    sensor_last_values[measurement_id] = value, count
-                    changes_detected = True
-                    logger.debug(
-                        f"[{measurement_id}] sensor not stabilized: missing last_value"
-                    )
-                elif abs(value - sensor_last_value) > sensor_tolerance:
-                    sensor_last_values[measurement_id] = (
-                        value,
-                        SENSOR_STABILIZE_COUNT,
-                    )
-                    changes_detected = True
-                    logger.debug(
-                        f"[{measurement_id}] sensor not stabilized: detected change outside of tolerances"
-                    )
-                elif count != 0:
-                    changes_detected = True
-                    logger.debug(
-                        f"[{measurement_id}] sensor not stabilized: detected no change but wait {count} more times"
-                    )
-                    sensor_last_values[measurement_id] = value, count - 1
-                else:
-                    logger.info(
-                        f"[{measurement_id}] sensor partly stabilized: detected no change"
-                    )
-            if not changes_detected:
-                logger.info(f"[{sensor_id}] sensor stabilized: no changes detected")
-                sensor_stabilized[sensor_id] = True
-
+        sensor_changes_detected = False
         for value, measurement_id in sensor_measurements:
             unit = sensor_unit[measurement_id]
             buffer = buffer_readings[measurement_id]
-            sensor_last_values[measurement_id] = (
-                value,
-                sensor_last_values[measurement_id][1],
-            )
+            last_value_raw, stabilization_count = sensor_last_values[measurement_id]
             last_value = buffer[-1][0] if len(buffer) > 0 else None
             sensor_tolerance = sensor_tolerances[measurement_id]
+            min_value, max_value = sensor_ranges[measurement_id]
+
+            change_detected_raw = (
+                abs(value - last_value_raw) > sensor_tolerance
+                if last_value_raw is not None
+                else True
+            )
+            sensor_last_values[measurement_id] = (
+                value,
+                SENSOR_STABILIZE_COUNT if change_detected_raw else stabilization_count -1 if stabilization_count > 0 else 0,
+            )
+            if change_detected_raw or stabilization_count > 0:
+                sensor_changes_detected = True
+
             change_detected = (
                 abs(value - last_value) > sensor_tolerance
                 if last_value is not None
                 else True
             )
-            min_value, max_value = sensor_ranges[measurement_id]
             within_range = value >= min_value and value <= max_value
 
             try:
                 if (
-                    abs(value - last_value) > 0
-                    if last_value is not None
+                    abs(value - last_value_raw) > 0
+                    if last_value_raw is not None
                     else True
                 ):
                     append_to_csv(
@@ -389,28 +371,40 @@ def read_sensor(timer, sensor_id):
                         f"[{measurement_id}] Unable to write data to CSV file: data_{measurement_id}.csv ({e})"
                     )
             else:
-                reason = f"not within tolerance {sensor_tolerance}{unit}"
+                reasons = []
+                if sensor_stabilized[sensor_id] and not change_detected:
+                    reasons.append(f"not within tolerance {sensor_tolerance}{unit} [{last_value=}{unit}]")
+                if not sensor_stabilized[sensor_id] and not change_detected_raw:
+                    reasons.append(f"not within tolerance {sensor_tolerance}{unit} [{last_value_raw=}{unit}]")
                 if not within_range:
-                    reason = (
-                        f"value not within range [{min_value}{unit},{max_value}{unit}]"
-                    )
-                    counter_readings[measurement_id]["bad"] += 1
-                elif not sensor_stabilized[sensor_id]:
-                    reason = f"sensor stabilization ongoing"
-
+                    reasons.append(f"not within range [{min_value}{unit},{max_value}{unit}]")
+                    counter_readings[measurement_id][COUNTER_READINGS_OUTSIDE_RANGE] += 1
+                if not sensor_stabilized[sensor_id]:
+                    reasons.append(f"sensor stabilization ongoing {SENSOR_STABILIZE_COUNT + 1 - stabilization_count}/{SENSOR_STABILIZE_COUNT}")
+                reason = ", ".join(reasons)
                 logger.debug(
                     f"[{measurement_id}] Skipped: current {value}{unit} ({reason})"
                 )
-
-            if within_range and sensor_stabilized[sensor_id]:
-                counter_readings[measurement_id]["good"] += 1
+            
+        if not sensor_changes_detected and not sensor_stabilized[sensor_id]:
+            logger.info(f"[{sensor_id}] sensor stabilized: no changes detected")
+            sensor_stabilized[sensor_id] = True 
 
     except Exception as e:
         logger.error(f"[{sensor_id}] Error reading sensor:", e)
-        if e in counter_readings[sensor_id]:
-            counter_readings[sensor_id][e] += 1
-        else:
-            counter_readings[sensor_id][e] = 1
+        counter_readings[sensor_id][COUNTER_READINGS_ERROR] += 1
+    
+        try:
+            append_to_csv(
+                f"data_errors_{sensor_id}.csv",
+                ["error", "Timestamp"],
+                [[str(e), timestamp]],
+                file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
+            )
+        except OSError as e:
+            logger.error(
+                f"[{sensor_id}] Unable to write data to CSV file: data_errors_{sensor_id}.csv ({e})"
+            )
 
 
 def read_dht22(timer):
@@ -437,6 +431,7 @@ def restart_bmp280(timer):
 
 
 def render_dashboard_html():
+    title = f"Dashboard {PROGRAM_NAME} {PROGRAM_VERSION}"
     api = [
         ("Measurements", "/json_measurements"),
     ]
@@ -453,19 +448,19 @@ def render_dashboard_html():
         ("Restart BMP280 sensor", "/restart_bmp280"),
     ]
 
-    html = f"<h1>Dashboard</h1>"
-    html += f"<h2>API</h2>"
+    html = f"<h1>{title}</h1>"
+    html += "<h2>API</h2>"
     for name, url in api:
         html += generate_html_button(name, url)
-    html += f"<h2>Routes</h2>"
+    html += "<h2>Routes</h2>"
     for name, url in routes:
         html += generate_html_button(name, url)
-    html += f"<h2>Actions</h2>"
+    html += "<h2>Actions</h2>"
     for name, url in actions:
         html += generate_html_button(name, url)
 
     return generate_html(
-        "Dashboard",
+        title,
         html,
         css_files=["/content_html"],
     )
@@ -516,9 +511,9 @@ def generate_json_readings():
             "sections": [
                 {
                     "title": title,
-                    "data": values
+                    "data": value
                 }
-                for title, values in counter_readings.items()
+                for title, value in counter_readings.items()
             ],
         }
     )
@@ -553,14 +548,14 @@ def generate_json_info():
                 {
                     "title": "Misc",
                     "data": {
-                        "Version": PROGRAM_VERSION,
-                        "Debug": DEBUG,
-                        "Automatic Restart": AUTOMATIC_DEVICE_RESTART,
                         "OS information":  dict(zip(['sysname', 'nodename', 'release', 'version', 'machine'], os.uname())),
                         "Uptime": dict(zip(['days', 'hours', 'minutes', 'seconds'], get_time_difference(time_init))),
                         "Current time": get_iso_timestamp(),
-                        "Buffer size": BUFFER_SIZE,
-                        "Health check time difference": f"{WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S}s",
+                        "PROGRAM_VERSION": PROGRAM_VERSION,
+                        "DEBUG": DEBUG,
+                        "AUTOMATIC_DEVICE_RESTART": AUTOMATIC_DEVICE_RESTART,
+                        "BUFFER_SIZE": BUFFER_SIZE,
+                        "WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN": WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN,
                     }
                 }
             ],
@@ -715,9 +710,9 @@ def web_server(ip, port=80):
 
 def web_server_health_check(timer):
     if (
-        time.ticks_diff(time.ticks_ms(), last_server_activity) > WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S * 60 * 1000
+        time.ticks_diff(time.ticks_ms(), last_server_activity) > WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN * 60 * 1000
     ):  # If no activity in the last 5 minutes
-        logger.warning(f"No server activity detected in the last {WEB_SERVER_HEALTH_CHECK_TIME_DIFF_S} min")
+        logger.warning(f"No server activity detected in the last {WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN} min")
     elif AUTOMATIC_DEVICE_RESTART:
         # Feed the watchdog timer even if no activity
         wdt.feed()
