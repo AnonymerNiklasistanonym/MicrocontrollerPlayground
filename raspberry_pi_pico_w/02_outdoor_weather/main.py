@@ -62,7 +62,7 @@ from http_helper import (
 DEBUG = const(True)
 
 PROGRAM_NAME = const("outdoor_weather")
-PROGRAM_VERSION = const("v0.2.8")
+PROGRAM_VERSION = const("v0.2.9")
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
 AUTOMATIC_DEVICE_RESTART = const(not DEBUG)
 
@@ -87,6 +87,11 @@ _DHT22_RANGE_RELATIVE_HUMIDITY_MIN = const(0)
 _DHT22_RANGE_RELATIVE_HUMIDITY_MAX = const(100)
 DHT22_RANGE_RELATIVE_HUMIDITY = (_DHT22_RANGE_RELATIVE_HUMIDITY_MIN, _DHT22_RANGE_RELATIVE_HUMIDITY_MAX)
 
+# Use a slower than possible frequency to save power and reduce errors
+# (but use a multiple of the actual frequency)
+TIMER_FREQ_DHT22 = const(0.25)  # 0.5 Hertz / 4*0.5 [1/0.25=4s]
+TIMER_FREQ_BMP280 = const(0.25)  # 157 Hertz / 4*157 [1/0.25=4s]
+
 SENSOR_ID_BMP280 = const("bmp280")
 SENSOR_ID_DHT22 = const("dht22")
 
@@ -107,7 +112,7 @@ COUNTER_READINGS_ERROR = const("error")
 # The amount of time between no web response and an automatic restart (if enabled)
 WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN = const(2)
 # The amount of values until a sensor is stabilized
-SENSOR_STABILIZE_COUNT = const(100)
+SENSOR_STABILIZE_COUNT = const(50)
 # The amount of values to keep in the buffers
 BUFFER_SIZE = const(10)
 
@@ -495,7 +500,7 @@ def generate_json_data():
             "title": "Data",
             "sections": [
                 {
-                    "title": f"{measurement_id} ({sensor_last_values[measurement_id][0]}{sensor_unit[measurement_id]})",
+                    "title": f"{measurement_id} ({sensor_last_values[measurement_id][0]}{sensor_unit[measurement_id]}, {SENSOR_STABILIZE_COUNT - sensor_last_values[measurement_id][1]}/{SENSOR_STABILIZE_COUNT})",
                     "data": [[sensor_unit[measurement_id], "Timestamp"]] + [[value, timestamp] for value, timestamp in values]
                 }
                 for measurement_id, values in buffer_readings.items()
@@ -525,6 +530,9 @@ def generate_json_info():
 
     sta = network.WLAN(network.STA_IF)
     ap = network.WLAN(network.AP_IF)
+    
+    timer_period_dht22 = 1 / TIMER_FREQ_DHT22
+    timer_period_bmp280 = 1 / TIMER_FREQ_BMP280
     
     return ujson.dumps(
         {
@@ -556,6 +564,9 @@ def generate_json_info():
                         "AUTOMATIC_DEVICE_RESTART": AUTOMATIC_DEVICE_RESTART,
                         "BUFFER_SIZE": BUFFER_SIZE,
                         "WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN": WEB_SERVER_HEALTH_CHECK_TIME_DIFF_MIN,
+                        "TIMER_FREQ_DHT22": f"{TIMER_FREQ_DHT22}Hz ({timer_period_dht22:.2f}s)",
+                        "TIMER_FREQ_BMP280": f"{TIMER_FREQ_BMP280}Hz ({timer_period_bmp280:.2f}s)",
+                        "SENSOR_STABILIZE_COUNT": SENSOR_STABILIZE_COUNT,
                     }
                 }
             ],
@@ -738,11 +749,13 @@ def main():
         # Start the periodic sensor reading
         read_dht22_timer = Timer(-1)
         read_dht22_timer.init(
-            freq=DHT22_FREQUENCY, mode=Timer.PERIODIC, callback=read_dht22
+            freq=TIMER_FREQ_DHT22, mode=Timer.PERIODIC, callback=read_dht22
         )
         # WARNING: Default frequency of BMP280 is too fast (use 2s instead)
         read_bmp280_timer = Timer(-1)
-        read_bmp280_timer.init(period=2000, mode=Timer.PERIODIC, callback=read_bmp280)
+        read_bmp280_timer.init(
+            freq=TIMER_FREQ_BMP280, mode=Timer.PERIODIC, callback=read_bmp280
+        )
         # Since the BMP280 timer is crashing all the time restart it periodically
         restart_bmp280_timer = Timer(-1)
         restart_bmp280_timer.init(

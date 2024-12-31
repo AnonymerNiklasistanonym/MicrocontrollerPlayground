@@ -20,7 +20,7 @@ function renderTableArray(dataArray) {
 function renderTableObject(dataObject) {
     const table = document.createElement('table');
     //table.border = 1;
-    for (const [key, value] of Object.entries(dataObject)) {
+    for (const [key, value] of Object.entries(dataObject).sort(([keyA], [keyB]) => keyA.localeCompare(keyB))) {
         const rowElement = document.createElement('tr');
         const colElementKey = document.createElement('td');
         colElementKey.textContent = key;
@@ -35,7 +35,7 @@ function renderTableObject(dataObject) {
 
 function renderListObject(dataObject) {
     const children = [];
-    for (const [key, value] of Object.entries(dataObject)) {
+    for (const [key, value] of Object.entries(dataObject).sort(([keyA], [keyB]) => keyA.localeCompare(keyB))) {
         const dataDiv = document.createElement('div');
         dataDiv.className = 'data-entry';
 
