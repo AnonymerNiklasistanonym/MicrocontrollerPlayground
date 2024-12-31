@@ -27,8 +27,6 @@ i2c_scan(i2c)
 lcd = I2cLcd(i2c, HD44780_LCD_I2C_ADDR, HD44780_LCD_I2C_NUM_ROWS, HD44780_LCD_I2C_NUM_COLS)
 
 
-
-
 def scroll_text_horizontal(lcd, text_rows, delay=0.001):
     """Scroll text horizontally"""
     max_length = max([len(text_row) for text_row in text_rows])
@@ -158,3 +156,4 @@ def main():
 
 
 main()
+
