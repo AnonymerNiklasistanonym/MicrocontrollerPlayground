@@ -59,12 +59,14 @@ from http_helper import (
 # Script constants
 
 # IMPORTANT: IF THIS IS FALSE THE DEVICE AUTO RESTARTS!
-DEBUG = const(True)
+DEBUG = const(False)
 
 PROGRAM_NAME = const("outdoor_weather")
-PROGRAM_VERSION = const("v0.2.9")
+PROGRAM_VERSION = const("v0.2.10")
 MICROSD_CARD_FILESYSTEM_PREFIX = const("/sd")
 AUTOMATIC_DEVICE_RESTART = const(not DEBUG)
+# Crashes and corrupts storage after long uptimes
+ENABLE_SD_CARD = const(False)
 
 BMP280_FREQUENCY_I2C = const(100000)  # Hertz (default 100kHz higher, fast mode 400kHz)
 BMP280_FREQUENCY = const(157)  # Hertz (WARNING: every 6.4ms!)
@@ -175,8 +177,9 @@ logger = Logger(name=PROGRAM_NAME, level="DEBUG")
 if DEBUG:
     console_handler = LogHandlerConsole()
     logger.addHandler(console_handler)
-file_handler = LogHandlerFile(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
-logger.addHandler(file_handler)
+if ENABLE_SD_CARD:
+    file_handler = LogHandlerFile(f"{MICROSD_CARD_FILESYSTEM_PREFIX}/logs.log")
+    logger.addHandler(file_handler)
 logger.addHandler(print_history_handler)
     
 
@@ -194,12 +197,13 @@ last_server_activity = time.ticks_ms()
 # SENSORS/DEVICES SHOULD BE INITIALIZED OUTSIDE OF THE MAIN METHOD!
 
 # MicroSD Card Adapter
-microsd_card_adapter_spi = SPI(
-    0,
-    sck=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_SCK),
-    mosi=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MOSI),
-    miso=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO),
-)
+if ENABLE_SD_CARD:
+    microsd_card_adapter_spi = SPI(
+        0,
+        sck=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_SCK),
+        mosi=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MOSI),
+        miso=Pin(GPIO_PIN_SPI_MICROSD_CARD_ADAPTER_MISO),
+    )
 
 def mount_sdcard():
     try:
@@ -213,7 +217,8 @@ def mount_sdcard():
     except Exception as e:
         logger.error("Failed to initialize/mount SD card:", e)
 
-mount_sdcard()
+if ENABLE_SD_CARD:
+    mount_sdcard()
 
 # Onboard-LED
 led_onboard = Pin("LED", Pin.OUT)
@@ -339,7 +344,7 @@ def read_sensor(timer, sensor_id):
             within_range = value >= min_value and value <= max_value
 
             try:
-                if (
+                if ENABLE_SD_CARD and (
                     abs(value - last_value_raw) > 0
                     if last_value_raw is not None
                     else True
@@ -364,17 +369,18 @@ def read_sensor(timer, sensor_id):
                     buffer.pop(0)
                 update_etag = True
 
-                try:
-                    append_to_csv(
-                        f"data_{measurement_id}.csv",
-                        [unit, "Timestamp"],
-                        [[value, timestamp]],
-                        file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
-                    )
-                except OSError as e:
-                    logger.error(
-                        f"[{measurement_id}] Unable to write data to CSV file: data_{measurement_id}.csv ({e})"
-                    )
+                if ENABLE_SD_CARD:
+                    try:
+                        append_to_csv(
+                            f"data_{measurement_id}.csv",
+                            [unit, "Timestamp"],
+                            [[value, timestamp]],
+                            file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
+                        )
+                    except OSError as e:
+                        logger.error(
+                            f"[{measurement_id}] Unable to write data to CSV file: data_{measurement_id}.csv ({e})"
+                        )
             else:
                 reasons = []
                 if sensor_stabilized[sensor_id] and not change_detected:
@@ -399,17 +405,18 @@ def read_sensor(timer, sensor_id):
         logger.error(f"[{sensor_id}] Error reading sensor:", e)
         counter_readings[sensor_id][COUNTER_READINGS_ERROR] += 1
     
-        try:
-            append_to_csv(
-                f"data_errors_{sensor_id}.csv",
-                ["error", "Timestamp"],
-                [[str(e), timestamp]],
-                file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
-            )
-        except OSError as e:
-            logger.error(
-                f"[{sensor_id}] Unable to write data to CSV file: data_errors_{sensor_id}.csv ({e})"
-            )
+        if ENABLE_SD_CARD:
+            try:
+                append_to_csv(
+                    f"data_errors_{sensor_id}.csv",
+                    ["error", "Timestamp"],
+                    [[str(e), timestamp]],
+                    file_path_prefix=MICROSD_CARD_FILESYSTEM_PREFIX
+                )
+            except OSError as e:
+                logger.error(
+                    f"[{sensor_id}] Unable to write data to CSV file: data_errors_{sensor_id}.csv ({e})"
+                )
 
 
 def read_dht22(timer):
@@ -449,9 +456,11 @@ def render_dashboard_html():
     actions = [
         ("Reset", "/reset"),
         ("Time sync", "/sync_time"),
-        ("Remount SDCard", "/remount_sdcard"),
         ("Restart BMP280 sensor", "/restart_bmp280"),
     ]
+    
+    if ENABLE_SD_CARD:
+        actions.append(("Remount SDCard", "/remount_sdcard"))
 
     html = f"<h1>{title}</h1>"
     html += "<h2>API</h2>"
@@ -567,6 +576,7 @@ def generate_json_info():
                         "TIMER_FREQ_DHT22": f"{TIMER_FREQ_DHT22}Hz ({timer_period_dht22:.2f}s)",
                         "TIMER_FREQ_BMP280": f"{TIMER_FREQ_BMP280}Hz ({timer_period_bmp280:.2f}s)",
                         "SENSOR_STABILIZE_COUNT": SENSOR_STABILIZE_COUNT,
+                        "ENABLE_SD_CARD": ENABLE_SD_CARD,
                     }
                 }
             ],
@@ -630,6 +640,8 @@ def handle_web_request(socket):
                 response = generate_http_response(
                     json_str, content_type=HTTP_CONTENT_TYPE_JSON, etag=current_etag
                 )
+        elif "GET / " in request:
+            response = generate_http_response(None, status=HTTP_STATUS_FOUND, location=f"/dashboard")
         elif "GET /dashboard" in request:
             response = generate_http_response(render_dashboard_html(), maxAge=60 * 60 * 24)
         elif "GET /dynamic_data" in request:
@@ -661,7 +673,7 @@ def handle_web_request(socket):
             response = generate_http_response(
                 "Restarted BMP280 sensor", content_type=HTTP_CONTENT_TYPE_TEXT
             )
-        elif "GET /remount_sdcard" in request:
+        elif "GET /remount_sdcard" in request and ENABLE_SD_CARD:
             mount_sdcard()
             response = generate_http_response(
                 "Remount SDCard", content_type=HTTP_CONTENT_TYPE_TEXT
@@ -674,6 +686,14 @@ def handle_web_request(socket):
                 content_type=HTTP_CONTENT_TYPE_TEXT,
             )
         elif "GET /reset" in request:
+            response = generate_http_response(
+                "Reset the device",
+                content_type=HTTP_CONTENT_TYPE_TEXT,
+            )
+            # Add this to send a response before restarting
+            cl.sendall(response)
+            cl.close()
+            time.sleep(1)
             reset()
         else:
             response = generate_http_response(
