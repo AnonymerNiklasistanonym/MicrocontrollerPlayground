@@ -66,6 +66,8 @@ WIDGET_SPACING = 2
 
 
 def get_text_dimensions(text_string, font) -> tuple[int, int]:
+    if text_string == "":
+        return 0, 0
     ascent, descent = font.getmetrics()
     text_width = font.getmask(text_string).getbbox()[2]
     text_height = font.getmask(text_string).getbbox()[3] + descent
@@ -170,7 +172,7 @@ def render_display_bw(actions: list[Action], widgets: list[Widget], display_reso
                          (calculated_font_sizes["big"] * len(widget_content)))
         # todo fix the height calculation
         for content in widget_content:
-            if content.images is not None:
+            if content.images is not None and len(content.images) > 0:
                 widget_height += max([img.height for img in content.images])
 
         if y_position + widget_height + WIDGET_SPACING > display_height:

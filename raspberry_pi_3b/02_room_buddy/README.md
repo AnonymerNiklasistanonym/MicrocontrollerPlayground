@@ -11,9 +11,17 @@ For debugging purposes the whole program can be run on another PC with a simulat
 
 ```sh
 # Start
-CALENDAR_URL="https://api.abfall.io/?key=INSERT_CUSTOM&mode=export&idhousenumber=INSERT_CUSTOM&wastetypes=INSERT_CUSTOM&showinactive=false&type=ics" python new_main.py
+CALENDAR_URL="https://api.abfall.io/?key=INSERT_CUSTOM&mode=export&idhousenumber=INSERT_CUSTOM&wastetypes=INSERT_CUSTOM&showinactive=false&type=ics" python main.py
 # Get journal logs
 journalctl SYSLOG_IDENTIFIER=room_buddy -f
 ```
 
 `systemd` service description: [`.config/systemd/user/room_buddy.service`](./room_buddy.service)
+
+> [!IMPORTANT]
+>
+> Since `lgpio` can't be built on some systems just install the dependencies using the following command:
+>
+> ```sh
+> grep -v 'lgpio' requirements.txt | pip install -r /dev/stdin
+> ```

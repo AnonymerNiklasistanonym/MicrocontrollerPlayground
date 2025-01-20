@@ -1,14 +1,13 @@
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Optional, NewType
 
 # requires 'aiohttp'
 import aiohttp
-
 # requires 'ics'
 from ics import Calendar
 from ics.grammar.parse import ParseError
@@ -16,7 +15,6 @@ from tatsu.exceptions import FailedToken
 
 from lib.plugins.plugin import PluginBase, ChangeDetected
 from lib.render.render import Widget, WidgetContent, Action, ActionContent
-
 
 TrashType = NewType('TrashType', str)
 TrashEvent = tuple[datetime, TrashType]
@@ -56,12 +54,15 @@ class Plugin(PluginBase):
         super().__init__("TrashNotifier", **kwargs)
         self.calendar_url: Optional[str] = None
         self.current_trash_dates: Optional[list[TrashEvent]] = []
+        # Keep track if there was an update between the last widget/action request
         self.last_checksum_widgets = ""
         self.last_checksum_actions = ""
-        self.trash_type_tomorrow: Optional[TrashType] = None
-        self.trash_type_bring_in: Optional[TrashType] = None
-        self.trash_taken_out_date: Optional[date] = None
-        self.trash_brought_in_date: Optional[date] = None
+        # Store what trash needs to be taken out or brought in
+        self.trash_type_take_out: list[TrashType] = []
+        self.trash_type_bring_in: list[TrashType] = []
+        # Keep track of trash that was already taken out or brought in
+        self.trash_taken_out: dict[TrashType, datetime] = dict()
+        self.trash_brought_in: dict[TrashType, datetime] = dict()
 
     def parse_ics(self, cache_file: Path) -> Calendar:
         self.logger.info("Parse ICS to calendar")
@@ -145,7 +146,6 @@ class Plugin(PluginBase):
         return None
 
     async def run(self):
-        """Simulate temperature data collection"""
         calendar_url = os.getenv('CALENDAR_URL', '')
         if not calendar_url:
             raise RuntimeError("CALENDAR_URL environment variable not set.")
@@ -165,48 +165,50 @@ class Plugin(PluginBase):
             retry_delay_ics = 1
             self.current_trash_dates = trash_dates
 
+            self.trash_type_take_out = []
+            self.trash_type_bring_in = []
+
             if self.current_trash_dates is not None and len(self.current_trash_dates) > 0:
                 current_time = datetime.now() + self.timedelta_offset
                 tomorrow_time = current_time + timedelta(days=1)
-                self.trash_type_tomorrow = None
-                self.trash_type_bring_in = None
-                for trash_date, trash_type in self.current_trash_dates:
-                    print(f"{trash_date.date() == tomorrow_time.date()=} {trash_date.date() != self.trash_taken_out_date=} {trash_date.date()=} {self.trash_taken_out_date=}")
-                    if trash_date.date() == tomorrow_time.date() and trash_date.date() != self.trash_taken_out_date:
-                        self.trash_type_tomorrow = trash_type
 
-                        def take_out_trash(current_trash_date: date):
+                for trash_date, trash_type in self.current_trash_dates:
+                    trash_was_taken_out = trash_type in self.trash_taken_out and trash_date == self.trash_taken_out[trash_type]
+                    if trash_date.date() == tomorrow_time.date() and not trash_was_taken_out:
+                        self.trash_type_take_out.append(trash_type)
+
+                        def take_out_trash(current_trash_date: datetime, current_trash_type: TrashType):
                             self.logger.debug(f"clicked black button: take_out_trash")
                             self.led_rgb_main.color = 0, 0, 0
                             self.led_rgb_info.color = 0, 0, 0
-                            self.trash_type_tomorrow = None
-                            self.trash_taken_out_date = current_trash_date
-                            self.logger.debug(f"deregistered when pressed black button: take_out_trash {self.trash_taken_out_date=}")
+                            self.trash_taken_out[current_trash_type] = current_trash_date
+                            self.trash_type_take_out = list(filter(lambda x: x != current_trash_type, self.trash_type_take_out))
+                            self.logger.debug(f"deregistered when pressed black button: take_out_trash {current_trash_type} ({current_trash_date})")
                             self.button_black.when_pressed = None
 
                         self.logger.debug(f"registered when pressed black button: take_out_trash")
-                        self.button_black.when_pressed = lambda: take_out_trash(trash_date.date())
-                        break
-                for trash_date, trash_type in self.current_trash_dates:
-                    if trash_date.date() == current_time.date() and trash_date.date() != self.trash_brought_in_date:
-                        self.trash_type_bring_in = trash_type
+                        self.button_black.when_pressed = lambda current_trash_date=trash_date, current_trash_type=trash_type: take_out_trash(current_trash_date, current_trash_type)
 
-                        def bring_in_trash():
+
+                for trash_date, trash_type in self.current_trash_dates:
+                    trash_was_brought_in = trash_type in self.trash_brought_in and trash_date == self.trash_brought_in[trash_type]
+                    if trash_date.date() == current_time.date() and not trash_was_brought_in:
+                        self.trash_type_bring_in.append(trash_type)
+
+                        def bring_in_trash(current_trash_date: datetime, current_trash_type: TrashType):
                             self.logger.debug(f"clicked black button: take_out_trash")
                             self.led_rgb_main.color = 0, 0, 0
                             self.led_rgb_info.color = 0, 0, 0
-                            self.trash_type_bring_in = None
-                            self.trash_brought_in_date = trash_date.date()
-                            self.logger.debug(f"deregistered when pressed black button: bring_in_trash {self.trash_brought_in_date}")
+                            self.trash_brought_in[current_trash_type] = current_trash_date
+                            self.trash_type_bring_in = list(filter(lambda x: x != current_trash_type, self.trash_type_bring_in))
+                            self.logger.debug(f"deregistered when pressed black button: bring_in_trash {current_trash_type} ({current_trash_date})")
                             self.button_black.when_pressed = None
 
                         self.logger.debug(f"registered when pressed black button: bring_in_trash")
-                        self.button_black.when_pressed = bring_in_trash
-                        break
-            else:
-                self.trash_type_tomorrow = None
-                self.trash_type_bring_in = None
+                        self.button_black.when_pressed = lambda current_trash_date=trash_date, current_trash_type=trash_type: bring_in_trash(current_trash_date, current_trash_type)
 
+
+            #await asyncio.sleep(10)  # For debugging update this to be 1!
             await asyncio.sleep(60 * 60)  # Check once every hour
 
     async def request_widgets(self):
@@ -230,20 +232,20 @@ class Plugin(PluginBase):
     async def request_actions(self):
         actions: list[Action] = []
         checksum = ""
-        if self.trash_type_tomorrow is not None:
+        for trash_type_take_out in self.trash_type_take_out:
             self.led_rgb_main.color = 1, 0, 0
-            self.led_rgb_info.color = TRASH_COLORS.get(self.trash_type_tomorrow, (0, 0, 0))
+            self.led_rgb_info.color = TRASH_COLORS.get(trash_type_take_out, (0, 0, 0))
             actions.append(Action(generate_content=lambda: ActionContent(
-                ("info_white", "Take trash out", self.trash_type_tomorrow)
+                ("info_white", "Take trash out", trash_type_take_out)
             )))
-            checksum += self.trash_type_tomorrow + datetime.now().strftime('%d.%m')
-        if self.trash_type_bring_in is not None:
+            checksum += trash_type_take_out + datetime.now().strftime('%d.%m')
+        for trash_type_bring_in in self.trash_type_bring_in:
             self.led_rgb_main.color = 1, 1, 0
-            self.led_rgb_info.color = TRASH_COLORS.get(self.trash_type_bring_in, (0, 0, 0))
+            self.led_rgb_info.color = TRASH_COLORS.get(trash_type_bring_in, (0, 0, 0))
             actions.append(Action(generate_content=lambda: ActionContent(
-                ("info_white", "Bring trash in", self.trash_type_bring_in)
+                ("info_white", "Bring trash in", trash_type_bring_in)
             )))
-            checksum += self.trash_type_bring_in + datetime.now().strftime('%d.%m')
+            checksum += trash_type_bring_in + datetime.now().strftime('%d.%m')
         change_detected = ChangeDetected(self.last_checksum_actions != checksum)
         self.last_checksum_actions = checksum
         return actions, change_detected
