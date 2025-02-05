@@ -1,7 +1,7 @@
 import asyncio
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Optional, NewType
@@ -54,6 +54,7 @@ class Plugin(PluginBase):
         super().__init__("TrashNotifier", **kwargs)
         self.calendar_url: Optional[str] = None
         self.current_trash_dates: Optional[list[TrashEvent]] = []
+        self.hour_offset_trash_notification: int = 8
         # Keep track if there was an update between the last widget/action request
         self.last_checksum_widgets = ""
         self.last_checksum_actions = ""
@@ -171,10 +172,13 @@ class Plugin(PluginBase):
             if self.current_trash_dates is not None and len(self.current_trash_dates) > 0:
                 current_time = datetime.now() + self.timedelta_offset
                 tomorrow_time = current_time + timedelta(days=1)
+                notification_time_take_out = datetime.combine(tomorrow_time.date(), time(0, 0)) - timedelta(hours=self.hour_offset_trash_notification)
+                notification_time_bring_in = datetime.combine(current_time.date(), time(0, 0)) + timedelta(hours=self.hour_offset_trash_notification)
 
                 for trash_date, trash_type in self.current_trash_dates:
                     trash_was_taken_out = trash_type in self.trash_taken_out and trash_date == self.trash_taken_out[trash_type]
-                    if trash_date.date() == tomorrow_time.date() and not trash_was_taken_out:
+                    trash_should_be_taken_out = trash_date.date() == tomorrow_time.date() and current_time >= notification_time_take_out
+                    if trash_should_be_taken_out and not trash_was_taken_out:
                         self.trash_type_take_out.append(trash_type)
 
                         def take_out_trash(current_trash_date: datetime, current_trash_type: TrashType):
@@ -189,10 +193,9 @@ class Plugin(PluginBase):
                         self.logger.debug(f"registered when pressed black button: take_out_trash")
                         self.button_black.when_pressed = lambda current_trash_date=trash_date, current_trash_type=trash_type: take_out_trash(current_trash_date, current_trash_type)
 
-
-                for trash_date, trash_type in self.current_trash_dates:
                     trash_was_brought_in = trash_type in self.trash_brought_in and trash_date == self.trash_brought_in[trash_type]
-                    if trash_date.date() == current_time.date() and not trash_was_brought_in:
+                    trash_should_be_taken_in = trash_date.date() == current_time.date() and current_time >= notification_time_bring_in
+                    if trash_should_be_taken_in and not trash_was_brought_in:
                         self.trash_type_bring_in.append(trash_type)
 
                         def bring_in_trash(current_trash_date: datetime, current_trash_type: TrashType):

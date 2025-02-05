@@ -165,9 +165,9 @@ async def main():
         button1.pack(side=tk.LEFT, padx=10)
         button2 = tk.Button(button_frame, text="Black Button", command=lambda: on_black_button_press())
         button2.pack(side=tk.LEFT, padx=10)
-        button3 = tk.Button(button_frame, text="+12h offset", command=lambda: update_timedelta(+12))
+        button3 = tk.Button(button_frame, text="+6h offset", command=lambda: update_timedelta(+6))
         button3.pack(side=tk.LEFT, padx=10)
-        button4 = tk.Button(button_frame, text="-12h offset", command=lambda: update_timedelta(-12))
+        button4 = tk.Button(button_frame, text="-6h offset", command=lambda: update_timedelta(-6))
         button4.pack(side=tk.LEFT, padx=10)
 
         # schedule the Tkinter window update (without awaiting it since it is a forever loop!)
@@ -179,8 +179,8 @@ async def main():
             # Redraw LEDs on the canvas
             canvas.delete("all")  # Clear the canvas before redrawing
             draw_leds(num_leds=2)  # Redraw the LEDs
-            button3.config(text=f"+12h offset {(datetime.now() + timedelta_offset).strftime('%m.%d %H:%M')}")  # Change button3 text
-            button4.config(text=f"-12h offset {(datetime.now() + timedelta_offset).strftime('%m.%d %H:%M')}")  # Change button4 text
+            button3.config(text=f"+6h offset {(datetime.now() + timedelta_offset).strftime('%m.%d %H:%M')}")  # Change button3 text
+            button4.config(text=f"-6h offset {(datetime.now() + timedelta_offset).strftime('%m.%d %H:%M')}")  # Change button4 text
             # Call update_canvas again after 50 milliseconds
             root.after(50, update_canvas)
 
