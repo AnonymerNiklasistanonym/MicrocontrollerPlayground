@@ -202,6 +202,52 @@ Select *Interface Options*, select *SPI*/*I2C*, enable/disable
 > sudo loginctl enable-linger $(whoami)
 > ```
 
+## Auto restart on crashes
+
+*WIP: Not yet tested but the Raspberry Pi crashes sometimes so this should mitigate manually unplugging it from the power supply.*
+
+### Hardware watchdog
+
+1. Install the watchdog package and enable it from the boot
+
+   ```sh
+   sudo apt install watchdog
+   sudo nano /boot/firmware/config.txt
+   ```
+
+   Add line at the bottom:
+
+   ```text
+   dtparam=watchdog=on
+   ```
+
+2. Load the watchdog module immediately:
+
+   ```sh
+   sudo modprobe bcm2835_wdt
+   ```
+
+3. Enable the watchdog service:
+
+   ```sh
+   sudo systemctl enable watchdog
+   sudo systemctl start watchdog
+   ```
+
+### Ping check
+
+Add cronjob that reboots the device if the `ping` command fails.
+
+```sh
+crontab -e
+```
+
+Add the following line at the end to reboot if ping fails (check every 30 minutes):
+
+```text
+*/30 * * * * ping -c 2 google.com > /dev/null || sudo reboot
+```
+
 ## Split terminal
 
 ```sh
