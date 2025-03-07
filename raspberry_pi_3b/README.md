@@ -62,6 +62,8 @@ Select *Interface Options*, select *SPI*/*I2C*, enable/disable
    ```sh
    # Install systemd python dependency to write logs to the journal
    sudo apt install python3-systemd
+   # > Additional dependency if using the Zero 2 W
+   sudo apt install libsystemd-dev
    ```
 
    ```sh

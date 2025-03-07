@@ -43,3 +43,12 @@ The pins and most of the setup of services are the same as the [Raspberry Pi (3b
       3. Select `5) Boot / Auto Login`
       4. Select `B1 console`
       5. Optionally remove the graphical user interface: `sudo apt remove --purge pi-greeter lightdm && sudo apt autoremove`
+   2. Disable printer service
+      1. `sudo systemctl stop cups`
+      2. `sudo systemctl disable cups`
+   3. Disable color service
+      1. `sudo systemctl stop colord`
+      2. `sudo systemctl disable colord`
+   4. Disable Bluetooth
+      1. `sudo systemctl stop bluetooth`
+      2. `sudo systemctl disable bluetooth`
