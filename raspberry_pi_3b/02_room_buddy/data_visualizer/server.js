@@ -26,9 +26,13 @@ function getDbDataInfo(id) {
     }
 }
 
-function getDbData(dbFile, tableName, valueColumnName, startDate = null, endDate = null) {
+function getDbData(dbFile, tableName, valueColumnName, average = false, startDate = null, endDate = null) {
     return new Promise((resolve, reject) => {
-        const db = new sqlite3.Database(dbFile);
+        const db = new sqlite3.Database(dbFile, sqlite3.OPEN_READONLY, (err) => {
+            if (err) {
+                return reject(err);
+            }
+        });
 
         const whereQuery = [];
         const params = [];
@@ -41,31 +45,82 @@ function getDbData(dbFile, tableName, valueColumnName, startDate = null, endDate
             whereQuery.push("timestamp <= ?");
             params.push(endDate);
         }
+        if (average) {
+            if (startDate) {
+                params.push(startDate);
+            }
+            if (endDate) {
+                params.push(endDate);
+            }
+        }
 
         const whereQueryString = whereQuery.length > 0 ? ` WHERE ${whereQuery.join(" AND ")}` : "";
-        const query = `SELECT timestamp, ${valueColumnName} AS value FROM ${tableName}${whereQueryString} ORDER BY timestamp`;
+        const query = average ? `
+-- Rename columns
+SELECT
+    time_group AS timestamp,
+    avg_value AS value
+FROM (
+-- Calculate the range
+WITH time_range AS (
+    SELECT julianday(MAX(timestamp)) - julianday(MIN(timestamp)) AS days_spanned
+    FROM ${tableName}${whereQueryString}
+)
+SELECT
+    CASE
+        -- If the day range is greater than a year smooth to days
+        WHEN (SELECT days_spanned FROM time_range) > 32 * 12 THEN strftime('%Y-%m-%dT00:00:00', timestamp)  -- ISO day
+        -- If the day range is greater than 3 months smooth to hours
+        WHEN (SELECT days_spanned FROM time_range) > 32 * 6 THEN strftime('%Y-%m-%dT%H:00:00', timestamp)   -- ISO hour
+        ELSE strftime('%Y-%m-%dT%H:%M:00', timestamp)                                                       -- ISO minute
+    END AS time_group,
+    AVG(${valueColumnName}) AS avg_value
+FROM ${tableName}${whereQueryString}
+-- Group values by time group instead of just listing all values
+GROUP BY time_group
+ORDER BY time_group
+);
+` : `SELECT timestamp, ${valueColumnName} AS value FROM ${tableName}${whereQueryString} ORDER BY timestamp`;
 
+        // DELETE
+        console.log("Query", query, params);
+
+        let startTime = performance.now();
         db.all(query, params, (err, rows) => {
+            let endTime = performance.now();
             if (err) {
                 reject(err);
             } else {
                 resolve(rows);
+                console.log("Query result", rows.length, endTime - startTime, "ms");
             }
+            db.close();
         });
-
-        db.close();
     });
 }
 
-app.get('/api/:location(indoor|outdoor)/:id', async (req, res) => {
-    const { location, id } = req.params;
+function isValidDate(date) {
+    const parsedDate = new Date(date);
+    return !isNaN(parsedDate.getTime());
+}
+
+// GET /api/indoor/123/true?startDate=2024-01-01&endDate=2024-02-01
+// GET /api/outdoor/789/
+app.get('/api/:location(indoor|outdoor)/:id/:average(average)?', async (req, res) => {
+    console.debug(req.url, req.ip, req.params, req.query);
+    const { location, id, average } = req.params;
+    const { startDate, endDate } = req.query;
     try {
         const dbFile = location === "indoor" ? INDOOR_DB : location === "outdoor" ? OUTDOOR_DB : null;
         if (dbFile === null) {
             throw Error(`Unknown location ${location}`);
         }
         const { tableName, valueColumnName } = getDbDataInfo(id);
-        const data = await getDbData(dbFile, tableName, valueColumnName);
+        const data = await getDbData(dbFile, tableName, valueColumnName,
+            average === "average",
+            isValidDate(startDate) ? new Date(startDate).toISOString() : null,
+            isValidDate(endDate) ? new Date(endDate).toISOString() : null,
+        );
         res.json(data);
     } catch (err) {
         res.status(500).json({ error: 'An error occurred', details: err.message });

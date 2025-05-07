@@ -112,7 +112,7 @@ function addLatestDataPoint(list, latestTimestamp) {
     return list;
 }
 
-async function fetchData() {
+async function fetchData(average, startDate, endDate) {
     const availableData = await fetch('/api/available_data').then(res => res.json());
     const data = {};
     for (const [category, sensors] of Object.entries(availableData)) {
@@ -120,7 +120,8 @@ async function fetchData() {
         for (const sensor of sensors) {
             const {name,locations} = sensor;
             for (const location of locations) {
-                data[category][`${name} (${location})`] = await fetch(`/api/${location}/${name}`).then(res => res.json());
+                data[category][`${name} (${location})`] = await fetch(`/api/${location}/${name}/${average ? "average" : ""}?startDate=${startDate}&endDate=${endDate}`)
+                .then(res => res.json());
             }
         }
     }
@@ -168,7 +169,7 @@ function filterData(data, startDate, endDate) {
             filteredData[category][sensor]["clipped"] = sensor_data_entry.map(a => ({
                 ...a,
                 timestamp: new Date(a.timestamp),
-            })).filter(dateRangeFilter(startDate, endDate, sensor));
+            }));//.filter(dateRangeFilter(startDate, endDate, sensor));
             if (category === "temperature_celsius") {
                 if (sensor.startsWith("dht22")) {
                     filteredData[category][sensor]["clipped"] = filteredData[category][sensor]["clipped"].filter(clipFilter(-40, 80, sensor));
@@ -340,24 +341,40 @@ function render(data, dateClipRange) {
     }
 }
 
-// Load data
-fetchData().then(data => {
+/** @type {HTMLInputElement} */
+const inputStartDate = document.getElementById("startDate");
+/** @type {HTMLInputElement} */
+const inputEndDate = document.getElementById("endDate");
+/** @type {HTMLInputElement} */
+const inputAverage = document.getElementById("average");
 
-    // Filter data based on date range input, then render it
-    function filterDataAndRender() {
-        const startDateValue = document.getElementById("startDate").value
-        const endDateValue = document.getElementById("endDate").value
-        const startDate = startDateValue === "" ? undefined : new Date(startDateValue);
-        const endDate = endDateValue === "" ? undefined : new Date(endDateValue);
+function main() {
+    // Load data
+    fetchData(inputAverage.checked, inputStartDate.value, inputEndDate.value).then(data => {
 
-        const filteredData = filterData(data, startDate, endDate)
-        render(filteredData, { startDate, endDate });
-    }
+        // Filter data based on date range input, then render it
+        function filterDataAndRender() {
+            const startDateValue = inputStartDate.value;
+            const endDateValue = inputEndDate.value;
+            const startDate = startDateValue === "" ? undefined : new Date(startDateValue);
+            const endDate = endDateValue === "" ? undefined : new Date(endDateValue);
 
-    // Event Listeners
-    document.getElementById("startDate").addEventListener("change", filterDataAndRender);
-    document.getElementById("endDate").addEventListener("change", filterDataAndRender);
+            const filteredData = filterData(data, startDate, endDate)
+            render(filteredData, { startDate, endDate });
+        }
 
-    // Initial Render
-    filterDataAndRender()
-}).catch(err => console.error(err));
+        // Event Listeners
+        //inputStartDate.addEventListener("change", filterDataAndRender);
+        //inputEndDate.addEventListener("change", filterDataAndRender);
+
+        // Initial Render
+        filterDataAndRender()
+    }).catch(err => console.error(err));
+}
+
+
+inputStartDate.addEventListener("change", main);
+inputEndDate.addEventListener("change", main);
+inputAverage.addEventListener("change", main);
+
+main();
