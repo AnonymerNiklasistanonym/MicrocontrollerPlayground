@@ -41,12 +41,14 @@ i2c = I2C(1, sda=Pin(GPIO_PIN_I2C_HD44780_SDA), scl=Pin(GPIO_PIN_I2C_HD44780_SCL
 i2c_scan(i2c)
 lcd = I2cLcd(i2c, HD44780_LCD_I2C_ADDR, HD44780_LCD_I2C_NUM_ROWS, HD44780_LCD_I2C_NUM_COLS)
 
-# Onboard LED
+# Onboard-LED
 led_onboard = Pin("LED", Pin.OUT)
 
-# External LEDs
+# -1 hour
 led_1 = Pin(GPIO_PIN_LED_ONE, Pin.OUT)
+# -1 Minute
 led_2 = Pin(GPIO_PIN_LED_TWO, Pin.OUT)
+# New Year
 led_3 = Pin(GPIO_PIN_LED_THREE, Pin.OUT)
 
 
@@ -91,16 +93,21 @@ def calculate_time_difference(date1, date2):
 
 # Countdown function
 def countdown_to_new_year():
-    start_time = time.ticks_ms() # Time when current time was set
+    # Get current time and target New Year's time
+    start_time = time.ticks_ms()
     current_time = localtime()  # Get current local time
-    #new_year_time = (2024, 12, 31, 18, 41, 0, 0, -1)  # Test based on current_time output
-    new_year_time = (2025, 1, 1, 0, 0, 0, 0, 0, -1)  # New Year's Eve
+    current_year = current_time[0]
+    # If we are already on or after Jan 1 00:00:00, target next year
+    if current_time[1] > 1 or (current_time[1] == 1 and current_time[2] > 1):
+        target_year = current_year + 1
+    else:
+        target_year = current_year
+    new_year_time = (target_year, 1, 1, 0, 0, 0, 0, 0, -1)
     time_zone_offset = 1 * 60 * 60  # UTC+1
     
-    # Debugging
     print(f"{current_time=} {new_year_time=} {time_zone_offset=}")
     
-    # Calculate the total time difference (in seconds) from current time to new years
+    # Calculate the total time difference (in seconds) from current time to New Year's Eve
     diff_seconds_total = calculate_time_difference(current_time, new_year_time) - time_zone_offset
 
     while diff_seconds_total > 0:
@@ -114,26 +121,38 @@ def countdown_to_new_year():
         # Stop if the remaining time is none
         if remaining_time <= 0:
             break
-        # Turn LED 1 on 5 minutes before new years
-        if remaining_time <= 60 * 5:
+        info = ""
+        if remaining_time <= 60 * 60:
             led_1.on()
-        # Turn LED 2 on 1 minute before new years
+            info = "[1h]"
+        if remaining_time <= 60 * 10:
+            info = "[10min]"
         if remaining_time <= 60:
             led_2.on()
-
+            info = "[60s]"
+        if remaining_time <= 30:
+            info = "[30s]"
+        if remaining_time <= 10:
+            info = "[10s]"
+        
+        # Calculate hours, minutes, and seconds for the countdown
         hours = remaining_time // 3600
         minutes = (remaining_time % 3600) // 60
         seconds = remaining_time % 60
         
+        # Clear the screen and update with countdown time
         lcd.clear()
-        lcd.putstr("Countdown: ")
-        lcd.move_to(0, 1)
-        lcd.putstr("{:02}:{:02}:{:02}".format(hours, minutes, seconds))
+        lcd.putstr("Countdown: {}".format(target_year))
 
-        # Measure the loop duration and sleep until the next second
+        # Format and display hours, minutes, and seconds
+        lcd.move_to(0, 1)
+        lcd.putstr("{:02}:{:02}:{:02} {}".format(hours, minutes, seconds, info))
+
+        # Measure the loop duration
         loop_end_time = time.ticks_ms()
         loop_duration = time.ticks_diff(loop_end_time, loop_start_time)
 
+        # Calculate the time to sleep to keep the countdown at 1 second intervals
         time_to_sleep = max(0, 1000 - loop_duration)  # Ensure no negative sleep time
         time.sleep_ms(time_to_sleep)
 
@@ -141,11 +160,11 @@ def countdown_to_new_year():
     led_2.on()
     led_3.on()
 
-    # Happy New Year :)
+    # Once the countdown finishes, display "Happy New Year"
     lcd.clear()
     lcd.putstr("Happy New Year!")
     lcd.move_to(0, 1)
-    lcd.putstr("2025!")
+    lcd.putstr("{}!".format(target_year))
 
 
 def main():
@@ -182,9 +201,10 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+        # Restart the machine in case the main function terminates
     except KeyboardInterrupt:
         print("Program stopped.")
     except MemoryError:
-        print("Memory error detected")
+        print("Memory error detected, restarting...")
     except Exception as e:
-        print(f"Unexpected error: {e}")
+        print(f"Unexpected error: {e}, restarting...")
